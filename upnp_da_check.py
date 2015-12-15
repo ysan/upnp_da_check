@@ -29,12 +29,28 @@ import copy
 NAMESPACE_UPNP_DEVICE   = "urn:schemas-upnp-org:device-1-0"
 NAMESPACE_UPNP_SERVICE  = "urn:schemas-upnp-org:service-1-0"
 NAMESPACE_DLNA_DEVICE   = "urn:schemas-dlna-org:device-1-0"          # prefix="dlna"
+NAMESPACE_SPTV_DEVICE   = "urn:schemas-skyperfectv-co-jp:device-1-0" # prefix="sptv"
+NAMESPACE_HDLINK_DEVICE = "urn:schemas-hdlnk-org:device-1-0"         # prefix="hdlnk"
+NAMESPACE_SONY_AV       = "urn:schemas-sony-com:av"                  # prefix="av"
+NAMESPACE_JLABS_DEVICE  = "urn:schemas-jlabs-or-jp:device-1-0"       # prefix="jlabs"
+
+#NAMESPACE_DIDL          = "urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/"
+#NAMESPACE_DC_ELEMENT    = "http://purl.org/dc/elements/1.1/"            # prefix="dc"
+#NAMESPACE_UPNP_METADATA = "urn:schemas-upnp-org:metadata-1-0/upnp/"     # prefix="upnp"
+#NAMESPACE_DLNA_METADATA = "urn:schemas-dlna-org:metadata-1-0/"          # prefix="dlna"
+#NAMESPACE_ARIB_METADATA = "urn:schemas-arib-or-jp:elements-1-0/"        # prefix="arib"
+#NAMESPACE_SPTV_METADATA = "urn:schemas-skyperfectv-co-jp:elements-1-0/" # prefix="sptv"
+#NAMESPACE_XSRS_METADATA = "urn:schemas-xsrs-org:metadata-1-0/x_srs/"    # prefix="xsrs"
+#NAMESPACE_DTCP_METADATA = "urn:schemas-dtcp-com:metadata-1-0/"          # prefix="dtcp"
 
 NAMESPACE_XMLSOAP_ENV   = "http://schemas.xmlsoap.org/soap/envelope/"
 
 ENCODING_STYLE_XMLSOAP  = "http://schemas.xmlsoap.org/soap/encoding/"
 
 SIOCGIFADDR = 0x8915
+
+MSEARCH_TTL = 4
+MSEARCH_TIMEOUT = 5
 
 
 gDeviceInfoMap = {}
@@ -73,7 +89,7 @@ class DeviceInfo():
 		self.__age = age
 
 		# from location
-		self.__locContent = ""
+		self.__locBody = ""
 		self.__urlBase = ""
 		self.__udn = ""
 		self.__friendlyName = ""
@@ -150,8 +166,8 @@ class DeviceInfo():
 
 
 	# from location
-	def setLocContent(self, content):
-		self.__locContent = content
+	def setLocBody(self, body):
+		self.__locBody = body
 
 	def setUrlBase(self, urlBase):
 		self.__urlBase = urlBase
@@ -282,7 +298,7 @@ class ServiceInfo():
 		self.__scpdUrl = scpdUrl
 		self.__controlUrl = controlUrl
 		self.__eventSubUrl = eventSubUrl
-		self.__scpdContent = ""
+		self.__scpdBody = ""
 		self.__actionListMap = {}
 		self.__serviceStateTableMap = {}
 
@@ -298,8 +314,8 @@ class ServiceInfo():
 	def getEventSubUrl(self):
 		return self.__eventSubUrl
 
-	def setScpdContent(self, content):
-		self.__scpdContent = content
+	def setScpdBody(self, body):
+		self.__scpdBody = body
 
 	def getScpdContent(self):
 		return self.__scpdContent
@@ -747,7 +763,7 @@ def msearch(timeout):
 	sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 	sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_LOOP, 0)
 	sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_IF, socket.inet_aton(gIfAddr))
-	sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, 4)
+	sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, MSEARCH_TTL)
 	sock.settimeout(timeout)
 
 	req  = "M-SEARCH * HTTP/1.1\r\n"
@@ -833,34 +849,6 @@ def msearch(timeout):
 
 	del queuingList
 
-"""
-def recvSocket(sock):
-	debugPrint("recvSocket")
-	totalData = ""
-	while True:
-		data = sock.recv(65536)
-		if not data:
-			debugPrint("disconnected from server")
-			# TODO
-			if len(totalData) > 0:
-				return totalData
-			else:
-				return None
-
-		totalData = totalData + data
-
-		# non blocking
-		readfds = set([sock])
-		rList, wList, xList = select.select(readfds, [], [], 0)
-		for sock in rList:
-			debugPrint("sock in rList")
-			continue
-
-		break
-
-	return totalData
-"""
-
 def recvSocket(sock):
 	debugPrint("recvSocket")
 	totalData = ""
@@ -899,7 +887,7 @@ def recvSocket(sock):
 #     tuple[0]: return code
 #               0: ok (all received)
 #               1: still the rest of the data
-#               2: error (including HTTP error)
+#               2: error
 #               3: header is not able to receive all
 #               4: chuked body
 #     tuple[1]: remain size (return code is valid only when the 1)
@@ -907,7 +895,7 @@ def recvSocket(sock):
 def checkHttpResponse(buff):
 	isHeaderReceived = False
 	term = ""
-	httpStatus = 0
+	httpStatus = ""
 
 	# check whether it has header reception completion
 	if buff.find("\r\n\r\n") >= 0:
@@ -925,9 +913,9 @@ def checkHttpResponse(buff):
 		res = HttpResponse(buff)
 		debugPrint("res status %d %s" % (res.status, res.reason))
 		httpStatus = "%d %s" % (res.status, res.reason)
-		if res.status != 200:
-			# error
-			return (2, 0, httpStatus)
+#		if res.status != 200:
+#			# error
+#			return (2, 0, httpStatus)
 
 		cl = res.getheader("Content-Length")
 		debugPrint("content length ------- " + str(cl))
@@ -970,11 +958,14 @@ def checkHttpResponse(buff):
 					# chunked
 					return (4, 0, httpStatus)
 				else:
-					# error
+					#TODO
+					# only chunked
 					return (2, 0, httpStatus)
 			else:
 				debugPrint("[" + buff + "]")
-				return (2, 0, httpStatus)
+				#TODO
+				# Content-Length, Transfer-Encoding can not both exist
+				return (0, 0, httpStatus)
 
 	else:
 		# header is not able to receive all
@@ -1050,7 +1041,7 @@ def isHexCharOnly(st):
 	return True
 
 # return tuple
-#     tuple[0]: content
+#     tuple[0]: HTTP response body
 #     tuple[1]: HTTP status code
 def sendrecv(addr, port, msg):
 	try:
@@ -1081,20 +1072,28 @@ def sendrecv(addr, port, msg):
 				httpStatus = rtn[2]
 
 				if kind == 0:
+					# ok (all received)
 					break
 				elif kind == 1:
+					# still the rest of the data
 					continue
 				elif kind == 2:
+					# error
 					return (None, httpStatus)
 				elif kind == 3:
+					# header is not able to receive all
 					continue
 				elif kind == 4:
+					# chuked body
 					crtn = checkChunkedData(buffTotal, True)
 					if crtn == 0:
+						# chunked data complete
 						break
 					elif crtn == 1:
+						# still the rest of the data @1line
 						continue
 					else:
+						# unexpected
 						return (None, httpStatus)
 
 			elif kind == 1:
@@ -1122,9 +1121,9 @@ def sendrecv(addr, port, msg):
 		if len(buffTotal) > 0:
 			res = HttpResponse(buffTotal)
 #			debugPrint(buffTotal)
-			content = res.read()
+			body = res.read()
 			res.close()
-			return (content, httpStatus)
+			return (body, httpStatus)
 		else:
 			return (None, 0)
 
@@ -1505,18 +1504,18 @@ def analyze(deviceInfo):
 	deviceInfo.setState(State.ANALYZING)
 
 	response = getHttpContent(deviceInfo.getIpAddr(), deviceInfo.getLocUrl())
-	responseLocContent = response[0]
+	responseLocBody = response[0]
 	responseStatusCode = response[1]
 
-	if responseLocContent is not None:
-		deviceInfo.setLocContent(responseLocContent)
+	if responseLocBody is not None:
+		deviceInfo.setLocBody(responseLocBody)
 
-		urlBase = getSingleElement(responseLocContent, "URLBase", NAMESPACE_UPNP_DEVICE)
-		udn = getSingleElement(responseLocContent, "UDN", NAMESPACE_UPNP_DEVICE)
-		flName = getSingleElement(responseLocContent, "friendlyName", NAMESPACE_UPNP_DEVICE)
-		devType = getSingleElement(responseLocContent, "deviceType", NAMESPACE_UPNP_DEVICE)
-		manuName = getSingleElement(responseLocContent, "manufacturer", NAMESPACE_UPNP_DEVICE)
-		dlnaType = getSingleElement(responseLocContent, "X_DLNADOC", NAMESPACE_DLNA_DEVICE)
+		urlBase = getSingleElement(responseLocBody, "URLBase", NAMESPACE_UPNP_DEVICE)
+		udn = getSingleElement(responseLocBody, "UDN", NAMESPACE_UPNP_DEVICE)
+		flName = getSingleElement(responseLocBody, "friendlyName", NAMESPACE_UPNP_DEVICE)
+		devType = getSingleElement(responseLocBody, "deviceType", NAMESPACE_UPNP_DEVICE)
+		manuName = getSingleElement(responseLocBody, "manufacturer", NAMESPACE_UPNP_DEVICE)
+		dlnaType = getSingleElement(responseLocBody, "X_DLNADOC", NAMESPACE_DLNA_DEVICE)
 
 		deviceInfo.setUrlBase(urlBase)
 		deviceInfo.setUdn(udn)
@@ -1527,7 +1526,7 @@ def analyze(deviceInfo):
 
 		numSuccessGetScpd = 0
 
-		result = getServiceListMap(responseLocContent)
+		result = getServiceListMap(responseLocBody)
 		serviceListMap = result[0]
 		status = result[1]
 		if len(serviceListMap) > 0:
@@ -1556,17 +1555,17 @@ def analyze(deviceInfo):
 					url = serviceInfo.getScpdUrl()
 
 				responseScpd = getHttpContent(deviceInfo.getIpAddr(), url)
-				responseScpdContent = responseScpd[0]
+				responseScpdBody = responseScpd[0]
 				responseScpdStatus = responseScpd[1]
-#				debugPrint(str(responseScpdContent))
-				if responseScpdContent is not None:
-					serviceInfo.setScpdContent(responseScpdContent)
+#				debugPrint(str(responseScpdBody))
+				if responseScpdBody is not None:
+					serviceInfo.setScpdBody(responseScpdBody)
 
-					actListMap = getActionListMap(responseScpdContent, serviceInfo.getType())
+					actListMap = getActionListMap(responseScpdBody, serviceInfo.getType())
 					if len(actListMap) > 0:
 						serviceInfo.setActionListMap(actListMap)
 
-					sstm = getServiceStateTableMap(responseScpdContent)
+					sstm = getServiceStateTableMap(responseScpdBody)
 					if len(sstm) > 0:
 						serviceInfo.setServiceStateTableMap(sstm)
 
@@ -1592,6 +1591,7 @@ def analyze(deviceInfo):
 # return tuple
 #     tuple[0]: resArgList
 #     tuple[1]: HTTP status code
+#     tuple[2]: HTTP response body
 def actionInnerWrapper(args):
 	deviceInfo = args[0]
 	serviceInfo = args[1]
@@ -1619,13 +1619,15 @@ def actionInnerWrapper(args):
 		url = serviceInfo.getControlUrl()
 
 	response = postSoapAction(deviceInfo.getIpAddr(), url, actionInfo, reqArgList)
-	responseContent = response[0]
+	responseBody = response[0]
 	responseStatus = response[1]
-	debugPrint("[%s]" % responseContent)
+	debugPrint("[%s]" % responseBody)
 
-	resArgList = getSoapResponse(responseContent, actionInfo)
+	resArgList = []
+	if re.match("200 +OK", responseStatus, re.IGNORECASE):
+		resArgList = getSoapResponse(responseBody, actionInfo)
 
-	return (resArgList, responseStatus)
+	return (resArgList, responseStatus, responseBody)
 
 def actionInner(deviceInfo, serviceType):
 	if deviceInfo is None or\
@@ -1678,46 +1680,29 @@ def actionInner(deviceInfo, serviceType):
 					reqArgList.append(arg)
 		print ""
 
-		"""
-		base = ""
-		if len(deviceInfo.getUrlBase()) > 0:
-			base = deviceInfo.getUrlBase()
-		else:
-			base = deviceInfo.getLocUrlBase()
-
-		base = re.sub("/$", "", base)
-
-		url = ""
-		o = urlparse(serviceInfo.getControlUrl())
-		if len(o.scheme) == 0:
-			ctrlUrl = ""
-			if not re.search("^/", serviceInfo.getControlUrl()):
-				ctrlUrl = "/" + serviceInfo.getControlUrl()
-			else:
-				ctrlUrl = serviceInfo.getControlUrl()
-			url = base + ctrlUrl
-		else:
-			url = serviceInfo.getControlUrl()
-
-		response = postSoapAction(deviceInfo.getIpAddr(), url, serviceInfo.getActionListMap()[act], reqArgList)
-		responseContent = response[0]
-		responseStatus = response[1]
-		debugPrint("[%s]" % responseContent)
-
-		resArgList = getSoapResponse(responseContent, serviceInfo.getActionListMap()[act])
-		"""
 		argTuple = (deviceInfo, serviceInfo, serviceInfo.getActionListMap()[act], reqArgList)
 		rtn = sendSyncMessage(actionInnerWrapper, True, argTuple, True, Priority.HIGH)
 		resArgList = rtn[0]
 		responseStatus = rtn[1]
+		responseBody = rtn[2]
 
-		print "    Response.   >>>status:[%s]" % responseStatus
+		print "    Response.  >>>status:[%s]" % responseStatus
+		if responseBody is not None and len(responseBody) > 0:
+			print "               >>>body: %s" % responseBody
+
+		print ""
 		for argl in iter(serviceInfo.getActionListMap()[act].getArgumentList()):
 			if argl.getDirection() == "out":
 				res = ""
 				if resArgList is not None and len(resArgList) > 0:
 					res = resArgList.pop(0)
-				print "      %s:[%s]" % (argl.getName(), res)
+				print "     --- %s:[%s] ---" % (argl.getName(), res)
+
+
+		sys.stdout.write("\n    Hit Enter. (return to -Select service type.-)")
+		raw_input().strip()
+		if gIsCatchSigInt:
+			return False
 
 		return True
 
@@ -2001,7 +1986,7 @@ def checkCommand(cmd):
 		return True
 
 	if cmd == "sc":
-#		msearch(5)
+#		msearch(MSEARCH_TIMEOUT)
 		if (gWorkerThread.getNowExecMsg() is not None) and (gWorkerThread.getNowExecMsg().cbFunc == msearch):
 			print "now running..."
 		else:
@@ -2015,7 +2000,7 @@ def checkCommand(cmd):
 						it.isEnable = False
 			qCond.release()
 
-			sendAsyncMessage(msearch, True, 5, Priority.HIGH)
+			sendAsyncMessage(msearch, True, MSEARCH_TIMEOUT, Priority.HIGH)
 
 		cashCommand(cmd)
 
@@ -2172,9 +2157,6 @@ def sigHandler(signum, frame):
 		gIsCatchSigInt = True
 
 def main(ifName):
-#	o = urlparse("http://43.31.109.57:2869/upnphost/udhisapi.dll?content=uuid:52e32ba1-8695-4a75-96d5-5063d18b74ba")
-#	debugPrint("%s, %s, %s, %s, %s, %s" % (o.scheme, o.netloc, o.path, o.params, o.query, o.fragment))
-
 	global gIfAddr
 	global gIfName
 	global gBaseQue
