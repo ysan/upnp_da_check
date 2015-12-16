@@ -29,5 +29,4 @@ You need to install some of the python module depending on the operating environ
 Author
 ------------
 Yoshitake Kurihara (kurihara0-lj@infoseek.jp)
-from Tokyo
 
