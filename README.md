@@ -78,14 +78,14 @@ This is when there is some upnp enabled devices on the LAN if.
 
 If you pass the argument UDN to info command, detailed information for that device appears.  
 (Display content here it will omitted.)  
-- Discover the contents of the packet
-- Location overview of the content of
-- The Published service list
-- In-service there is what kind of action, and information of the argument to pass to the action  
-etc  
+\ * Discover the contents of the packet
+\ * Location overview of the content of
+\ * The Published service list
+\ * In-service there is what kind of action, and information of the argument to pass to the action  
+\ * etc  
 
 
-	\./upnp_da_check.py > act uuid:cfe92100-67c4-11d4-a45f-xxxxxxxxxxxx
+	./upnp_da_check.py > act uuid:cfe92100-67c4-11d4-a45f-xxxxxxxxxxxx
 	uuid:cfe92100-67c4-11d4-a45f-xxxxxxxxxxxx [ 1596]  2/2 [EPSON52DBB0] EPSON  http://43.2.60.163/DEVICE/PRINTER1.XML
 	  ____________________
 	  Select service type.
