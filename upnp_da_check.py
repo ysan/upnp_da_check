@@ -1053,7 +1053,7 @@ def sendrecv(addr, port, msg):
 		buffTotal = ""
 		kind = -1
 		remain = 0
-		httpStatus = 0
+		httpStatus = ""
 		crtn = 0
 
 		while True:
@@ -1125,17 +1125,17 @@ def sendrecv(addr, port, msg):
 			res.close()
 			return (body, httpStatus)
 		else:
-			return (None, 0)
+			return (None, httpStatus)
 
 	except socket.timeout:
 		sock.close()
 		debugPrint("tcp socket timeout")
-		return (None, 0)
+		return (None, "")
 
 	except:
 		sock.close()
 		putsExceptMsg()
-		return (None, 0)
+		return (None, "")
 
 def getHttpContent(addr, url):
 	if addr is None or len(addr) == 0 or\
