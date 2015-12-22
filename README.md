@@ -78,11 +78,11 @@ This is when there is some upnp enabled devices on the LAN if.
 
 If you pass the argument UDN to info command, detailed information for that device appears.  
 (Display content here it will omitted.)  
- * Discover the contents of the packet
- * Location overview of the content of
- * The Published service list
- * In-service there is what kind of action, and information of the argument to pass to the action  
- * etc
+- Discover the contents of the packet
+- Location overview of the content of
+- The Published service list
+- In-service there is what kind of action, and information of the argument to pass to the action  
+- etc
 
 
 	./upnp_da_check.py > act uuid:cfe92100-67c4-11d4-a45f-xxxxxxxxxxxx
@@ -154,15 +154,15 @@ When the exit from the console, enter the "q".
 
 Tool in the command
 ------------
- * ls [UDN|ip addr]    - display device list
- * r                   - join multicast group (on/off)
- * sc                  - send SSDP M-SEARCH
- * info <UDN>          - display device info
- * an <UDN>            - connect and get device info
- * act <UDN>           - send action to device
- * ss                  - display status
- * d                   - debug log on/off
- * q                   - exit from console
+- ls [UDN|ip addr]    - display device list
+- r                   - join multicast group (on/off)
+- sc                  - send SSDP M-SEARCH
+- info \<UDN\>          - display device info
+- an \<UDN\>            - connect and get device info
+- act \<UDN\>           - send action to device
+- ss                  - display status
+- d                   - debug log on/off
+- q                   - exit from console
 
 
 Platforms
