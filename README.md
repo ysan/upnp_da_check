@@ -27,7 +27,7 @@ Console will rise when you start the program.
 	none.
 	./upnp_da_check.py >
 
-When you run the ls to display the device list.
+When you run the ls to display the device list.  
 Device list because this case has not received the discover packet is empty.
 
 
@@ -35,7 +35,7 @@ Device list because this case has not received the discover packet is empty.
 	[Multicast receive start]
 	./upnp_da_check.py >
 
-When you run the r command to join the multicast group.
+When you run the r command to join the multicast group.  
 This you will start receiving the discover packet.
 
 
@@ -64,8 +64,8 @@ Repeating the r command to toggle the start / stop.
 	11 items.
 	./upnp_da_check.py >
 
-as long as it receives the discover packet and keeps the information to the device list.
-You have to display a list with the ls command.
+as long as it receives the discover packet and keeps the information to the device list.  
+You have to display a list with the ls command.  
 This is when there is some upnp enabled devices on the LAN if.
 
 
@@ -76,12 +76,12 @@ This is when there is some upnp enabled devices on the LAN if.
 	.
 	.
 
-If you pass the argument UDN to info command, detailed information for that device appears.
-(Display content here it will omitted.)
-E Discover the contents of the packet
-E Location overview of the content of
-? The Published service list
-Or in-service there is what kind of action, and information of the argument to pass to the action
+If you pass the argument UDN to info command, detailed information for that device appears.  
+(Display content here it will omitted.)  
+ * Discover the contents of the packet  
+ * Location overview of the content of  
+ * The Published service list  
+Or in-service there is what kind of action, and information of the argument to pass to the action  
 etc
 
 
@@ -95,7 +95,7 @@ etc
 	
 	      Enter No. --> 
 
-If you pass the argument UDN to act command, you can perform the action of the public service for the equipment.
+If you pass the argument UDN to act command, you can perform the action of the public service for the equipment.  
 You choose whether first how to service.
 
 
@@ -130,6 +130,10 @@ After selecting the service, you will select the action.
 	     --- X_ErrorReason:[noerror] ---
 	
 	    Hit Enter. (return to -Select service type.-)
+
+Result of action has been returned.  
+You can view the contents of the HTTP status code and the body, you have to display the value obtained in the action.
+"X_PrinterStatusString" results I have indicates that the ink is running low.
 
 
 
