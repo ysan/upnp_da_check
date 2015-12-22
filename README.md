@@ -85,7 +85,7 @@ If you pass the argument UDN to info command, detailed information for that devi
 etc  
 
 
-	./upnp_da_check.py > act uuid:cfe92100-67c4-11d4-a45f-xxxxxxxxxxxx
+	\./upnp_da_check.py > act uuid:cfe92100-67c4-11d4-a45f-xxxxxxxxxxxx
 	uuid:cfe92100-67c4-11d4-a45f-xxxxxxxxxxxx [ 1596]  2/2 [EPSON52DBB0] EPSON  http://43.2.60.163/DEVICE/PRINTER1.XML
 	  ____________________
 	  Select service type.
