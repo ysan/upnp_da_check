@@ -1543,6 +1543,10 @@ def analyze(deviceInfo):
 			for key in serviceListMap:
 				serviceInfo = serviceListMap[key]
 				url = ""
+
+				if serviceInfo.getScpdUrl() is None or len(serviceInfo.getScpdUrl()) == 0:
+					continue
+
 				o = urlparse(serviceInfo.getScpdUrl())
 				if len(o.scheme) == 0:
 					scpd = ""
