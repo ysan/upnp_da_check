@@ -542,7 +542,7 @@ class MulticastReceiveThread(threading.Thread):
 		super(MulticastReceiveThread, self).__init__()
 		self.daemon = True
 		self.__cond = Condition()
-		self.__isEnable = False
+		self.__isEnable = True
 
 	def run(self):
 		# server address = "" --> INADDR_ANY
@@ -1899,6 +1899,7 @@ def getIfAddr(ifName):
 	return socket.inet_ntoa(result[20:24])
 
 def getGlobalState():
+	print "--------------------------------"
 	print "interface: [%s (%s)]" % (gIfName, gIfAddr)
 
 	q = gBaseQue.get(Priority.HIGH)
@@ -1933,6 +1934,8 @@ def getGlobalState():
 		print "debug print: [on]"
 	else:
 		print "debug print: [off]"
+
+	print "--------------------------------"
 
 def sendSyncMessage(cbFunc, isNeedArg, arg, isNeedRtnVal, priority):
 	if cbFunc is None or\
@@ -2172,7 +2175,6 @@ def main(ifName):
 		print "%s is not existed." % ifName
 		return
 	else:
-		print "%s : %s" % (ifName, addr)
 		gIfAddr = addr
 		gIfName = ifName
 
@@ -2190,9 +2192,14 @@ def main(ifName):
 	gMRThread.start()
 	timerThread.start()
 
-	print "console start."
+	print ""
+	print "== UPnP Device Architecture checktool =="
+	getGlobalState()
+	print ""
+
+	print "console start..."
 	mainLoop()
-	print "console end."
+	print "console end..."
 
 	#TODO  finish sub thread
 #	gWorkerThread.join()
