@@ -438,7 +438,7 @@ class BaseQue():
 
 	def deQue(self):
 		self.__cond.acquire()
-		debugPrint("que num:[%d,%d,%d]" % (len(self.__queHi), len(self.__queMi), len(self.__queLo)))
+		debugPrint("que num:[Hi:%d,Mid:%d,Lo:%d]" % (len(self.__queHi), len(self.__queMi), len(self.__queLo)))
 		popObj = None
 		if len(self.__queHi) > 0:
 			popObj = self.__queHi.pop(0)
@@ -708,7 +708,7 @@ class TimerThread(threading.Thread):
 					debugPrint("age is 0. [%s]" % key)
 
 					# disable queue @ this usn
-					disableAnalyzeQueue(key)
+					self.__disableAnalyzeQueue(key)
 
 					if gWorkerThread.getNowExecMsg() is not None:
 						if (gWorkerThread.getNowExecMsg().cbFunc != analyze) or (gWorkerThread.getNowExecMsg().arg.getUsn() != key):
@@ -726,36 +726,36 @@ class TimerThread(threading.Thread):
 
 		gLockDeviceInfoMap.release() # unlock
 
-def disableAnalyzeQueue(usn):
-	q = gBaseQue.get(Priority.HIGH)
-	qList = q[0]
-	qCond = q[1]
-	qCond.acquire()
-	if len(qList) > 0:
-		for it in iter(qList):
-			if it.cbFunc == analyze and it.arg.getUsn() == usn:
-				it.isEnable = False
-	qCond.release()
+	def __disableAnalyzeQueue (self, usn):
+		q = gBaseQue.get(Priority.HIGH)
+		qList = q[0]
+		qCond = q[1]
+		qCond.acquire()
+		if len(qList) > 0:
+			for it in iter(qList):
+				if it.cbFunc == analyze and it.arg.getUsn() == usn:
+					it.isEnable = False
+		qCond.release()
 
-	q = gBaseQue.get(Priority.MID)
-	qList = q[0]
-	qCond = q[1]
-	qCond.acquire()
-	if len(qList) > 0:
-		for it in iter(qList):
-			if it.cbFunc == analyze and it.arg.getUsn() == usn:
-				it.isEnable = False
-	qCond.release()
+		q = gBaseQue.get(Priority.MID)
+		qList = q[0]
+		qCond = q[1]
+		qCond.acquire()
+		if len(qList) > 0:
+			for it in iter(qList):
+				if it.cbFunc == analyze and it.arg.getUsn() == usn:
+					it.isEnable = False
+		qCond.release()
 
-	q = gBaseQue.get(Priority.LOW)
-	qList = q[0]
-	qCond = q[1]
-	qCond.acquire()
-	if len(qList) > 0:
-		for it in iter(qList):
-			if it.cbFunc == analyze and it.arg.getUsn() == usn:
-				it.isEnable = False
-	qCond.release()
+		q = gBaseQue.get(Priority.LOW)
+		qList = q[0]
+		qCond = q[1]
+		qCond.acquire()
+		if len(qList) > 0:
+			for it in iter(qList):
+				if it.cbFunc == analyze and it.arg.getUsn() == usn:
+					it.isEnable = False
+		qCond.release()
 
 def msearch(timeout):
 	print "start M-SEARCH."
@@ -1923,7 +1923,7 @@ def putsGlobalState():
 	l = len(qList)
 	qCond.release()
 
-	print ("workerThread queue: [H:%d, M:%d, L:%d]" % (h, m, l))
+	print ("workerThread queue: [Hi:%d, Mid:%d, Lo:%d]" % (h, m, l))
 
 	if gMRThread.isEnable():
 		print "Multicast receive: [running]"
