@@ -1898,7 +1898,7 @@ def getIfAddr(ifName):
 	# The purpose of the data is entered from the results obtained 20byte in ioctl to 23byte th
 	return socket.inet_ntoa(result[20:24])
 
-def getGlobalState():
+def putsGlobalState():
 	print "--------------------------------"
 	print "interface: [%s (%s)]" % (gIfName, gIfAddr)
 
@@ -1923,7 +1923,7 @@ def getGlobalState():
 	l = len(qList)
 	qCond.release()
 
-	print ("workerThread queue: [%d, %d, %d]" % (h, m, l))
+	print ("workerThread queue: [H:%d, M:%d, L:%d]" % (h, m, l))
 
 	if gMRThread.isEnable():
 		print "Multicast receive: [running]"
@@ -2017,7 +2017,7 @@ def checkCommand(cmd):
 		cashCommand(cmd)
 
 	elif cmd == "ss":
-		getGlobalState()
+		putsGlobalState()
 		cashCommand(cmd)
 
 	elif cmd == "h":
@@ -2194,7 +2194,7 @@ def main(ifName):
 
 	print ""
 	print "== UPnP Device Architecture checktool =="
-	getGlobalState()
+	putsGlobalState()
 	print ""
 
 	print "console start..."
