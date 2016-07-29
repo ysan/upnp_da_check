@@ -64,6 +64,7 @@ gIsDebugPrint = False
 gBaseQue = None
 gWorkerThread = None
 gMRThread = None
+gTimerThread = None
 gLockDeviceInfoMap = threading.Lock()
 
 
@@ -460,7 +461,7 @@ class BaseQue():
 		else:
 			return (self.__queLo, self.__cond)
 
-# reply object for sendSyncMessage
+# reply object for Message().sendSync()
 class UniqQue():
 	def __init__(self):
 		self.__cond = Condition()
@@ -494,48 +495,84 @@ class MessageObject():
 		self.opt = opt
 		self.isEnable = True
 
-class WorkerThread(threading.Thread):
+class Message():
+	def sendSync (self, cbFunc, isNeedArg, arg, isNeedRtnVal, priority):
+		if cbFunc is None or\
+			isNeedArg is None or\
+			isNeedRtnVal is None or\
+			priority is None or\
+			gBaseQue is None:
+			return
+
+		uniqQue = UniqQue()
+		msg = MessageObject (cbFunc, isNeedArg, arg, uniqQue, isNeedRtnVal, priority, None)
+		gBaseQue.enQue (msg)
+		return uniqQue.receive()
+
+	def sendAsync (self, cbFunc, isNeedArg, arg, priority):
+		if cbFunc is None or\
+			isNeedArg is None or\
+			priority is None or\
+			gBaseQue is None:
+			return
+
+		msg = MessageObject (cbFunc, isNeedArg, arg, None, False, priority, None)
+		gBaseQue.enQue (msg)
+
+	# for msearch
+	def sendAsyncFromMsearch (self, cbFunc, isNeedArg, arg, priority):
+		if cbFunc is None or\
+			isNeedArg is None or\
+			priority is None or\
+			gBaseQue is None:
+			return
+
+		msg = MessageObject (cbFunc, isNeedArg, arg, None, False, priority, "by_msearch")
+		gBaseQue.enQue(msg)
+
+class WorkerThread (threading.Thread):
 	def __init__(self):
 		super(WorkerThread, self).__init__()
 		self.daemon = True
-		self.__nowExecMsg = None
+		self.__nowExecQue = None
 
 	def run(self):
 		while True:
 			rtnVal = None
 
-			msg = gBaseQue.deQue()
-			if msg is None:
+			# que is MessageObject()
+			que = gBaseQue.deQue()
+			if que is None:
 				gBaseQue.waitQue()
 			else:
-				if not msg.isEnable:
+				if not que.isEnable:
 					debugPrint("this queue is ignore")
 					continue
 
-				self.__nowExecMsg = msg
+				self.__nowExecMsg = que
 
 				debugPrint("worker thread exec")
 
-				if msg.isNeedRtnVal:
-					if msg.isNeedArg:
-						rtnVal = msg.cbFunc(msg.arg)
+				if que.isNeedRtnVal:
+					if que.isNeedArg:
+						rtnVal = que.cbFunc(que.arg)
 					else:
-						rtnVal = msg.cbFunc()
+						rtnVal = que.cbFunc()
 				else:
-					if msg.isNeedArg:
-						msg.cbFunc(msg.arg)
+					if que.isNeedArg:
+						que.cbFunc(que.arg)
 					else:
-						msg.cbFunc()
+						que.cbFunc()
 
-				if msg.replyObj is not None:
-					# msg.replyObj is UniqQue()
-					msg.replyObj.reply(rtnVal)
+				if que.replyObj is not None:
+					# que.replyObj is UniqQue()
+					que.replyObj.reply(rtnVal)
 
 				self.__nowExecMsg = None
 
 	# reference only
-	def getNowExecMsg(self):
-		return copy.deepcopy(self.__nowExecMsg)
+	def getNowExecQue(self):
+		return copy.deepcopy(self.__nowExecQue)
 
 class MulticastReceiveThread(threading.Thread):
 	def __init__(self):
@@ -603,7 +640,7 @@ class MulticastReceiveThread(threading.Thread):
 						##################################
 						# not queuing if there is piled in that queue at the same [usn]
 						if not self.__checkAlreadyQueuing(keyUsn):
-							sendAsyncMessage(analyze, True, gDeviceInfoMap[keyUsn], Priority.LOW)
+							Message().sendAsync(analyze, True, gDeviceInfoMap[keyUsn], Priority.LOW)
 						else:
 							debugPrint("not queuing")
 						##################################
@@ -690,9 +727,16 @@ class TimerThread(threading.Thread):
 	def __init__(self):
 		super(TimerThread, self).__init__()
 		self.daemon = True
+		self.__cond = Condition()
+		self.__isEnable = True
 
 	def run(self):
 		while True:
+			if not self.__isEnable:
+				self.__cond.acquire()
+				self.__cond.wait()
+				self.__cond.release()
+
 			time.sleep(1)
 			self.__refreshAge()
 
@@ -710,8 +754,8 @@ class TimerThread(threading.Thread):
 					# disable queue @ this usn
 					self.__disableAnalyzeQueue(key)
 
-					if gWorkerThread.getNowExecMsg() is not None:
-						if (gWorkerThread.getNowExecMsg().cbFunc != analyze) or (gWorkerThread.getNowExecMsg().arg.getUsn() != key):
+					if gWorkerThread.getNowExecQue() is not None:
+						if (gWorkerThread.getNowExecQue().cbFunc != analyze) or (gWorkerThread.getNowExecQue().arg.getUsn() != key):
 							delKeyList.append(key)
 						else:
 							debugPrint("[%s] is analyzing. don't detele." % key)
@@ -756,6 +800,818 @@ class TimerThread(threading.Thread):
 				if it.cbFunc == analyze and it.arg.getUsn() == usn:
 					it.isEnable = False
 		qCond.release()
+
+	def toggle(self):
+		if self.__isEnable:
+			self.__isEnable = False
+			print "[Cache-Control disable]"
+		else:
+			self.__isEnable = True
+			self.__cond.acquire()
+			self.__cond.notify()
+			self.__cond.release()
+			print "[Cache-Control enable]"
+
+	def isEnable(self):
+		return self.__isEnable
+
+class BaseFunc():
+	def __recvSocket(self, sock):
+		debugPrint("recvSocket")
+		totalData = ""
+		isContinue = False
+
+		while True:
+			data = sock.recv(65536)
+			if not data:
+				debugPrint("disconnected from server")
+				# TODO
+				if len(totalData) > 0:
+					return totalData
+				else:
+					return None
+
+			debugPrint("sock.recv size " + str(len(data)))
+			totalData += data
+
+			# timeout 50mS
+			readfds = set([sock])
+			rList, wList, xList = select.select(readfds, [], [], 0.05)
+			for r in iter(rList):
+				if r == sock:
+					debugPrint("sock in rList")
+					isContinue = True
+
+			if isContinue:
+				isContinue = False
+				continue
+			else:
+				break
+
+		return totalData
+
+	# return tuple
+	#     tuple[0]: return code
+	#               0: ok (all received)
+	#               1: still the rest of the data
+	#               2: error
+	#               3: header is not able to receive all
+	#               4: chuked body
+	#     tuple[1]: remain size (return code is valid only when the 1)
+	#     tuple[2]: HTTP status code
+	def __checkHttpResponse(self, buff):
+		isHeaderReceived = False
+		term = ""
+		httpStatus = ""
+
+		# check whether it has header reception completion
+		if buff.find("\r\n\r\n") >= 0:
+			isHeaderReceived = True
+			term = "\r\n"
+		else:
+			if buff.find("\n\n") >= 0:
+				isHeaderReceived = True
+				term = "\n"
+			else:
+				isHeaderReceived = False
+
+		debugPrint("is all header received ? --> " + str(isHeaderReceived))
+		if isHeaderReceived:
+			res = HttpResponse(buff)
+			debugPrint("res status %d %s" % (res.status, res.reason))
+			httpStatus = "%d %s" % (res.status, res.reason)
+#			if res.status != 200:
+#				# error
+#				return (2, 0, httpStatus)
+
+			cl = res.getheader("Content-Length")
+			debugPrint("content length ------- " + str(cl))
+			if cl is not None:
+				spBuff = buff.split(term+term)
+				if len(spBuff) >= 2:
+
+					# check spBuff data
+					length = 0
+					for i in range(0, len(spBuff)):
+						if i != 0:
+							length = length + len(spBuff[i])
+							if i >= 2:
+								length = length + len(term+term)
+					debugPrint("current content length %d" % length)
+
+					if long(cl) == length:
+						# all received
+						debugPrint("all received")
+						return (0, 0, httpStatus)
+					elif long(cl) > length:
+						# still the rest of the data
+						debugPrint("still the rest of the data")
+						return (1, long(cl) - length, httpStatus)
+					else:
+						# error
+						debugPrint("error")
+						return (2, 0, httpStatus)
+				else:
+					# unexpected
+					debugPrint("term split is unexpected.  len(spBuff) " + str(len(spBuff)))
+					debugPrint("[" + buff + "]")
+					return (2, 0, httpStatus)
+
+			else:
+				te = res.getheader("Transfer-Encoding")
+				debugPrint("transfer encoding ------- " + str(te))
+				if te is not None:
+					if re.match("chunked", te, re.IGNORECASE):
+						# chunked
+						return (4, 0, httpStatus)
+					else:
+						#TODO
+						# only chunked
+						return (2, 0, httpStatus)
+				else:
+					debugPrint("[" + buff + "]")
+					#TODO
+					# Content-Length, Transfer-Encoding can not both exist
+					return (0, 0, httpStatus)
+
+		else:
+			# header is not able to receive all
+			debugPrint("header is not able to receive all")
+			debugPrint("[" + buff + "]")
+			return (3, 0, httpStatus)
+
+	def __checkChunkedData(self, data, isFirst):
+		debugPrint("checkChunkedData")
+
+		global gChunkedRemain
+		chu = ""
+		if isFirst:
+			gChunkedRemain = 0
+
+			spData = data.split("\r\n\r\n")
+			if len(spData) >= 2:
+				chu = spData[1];
+			else:
+				# unexpected
+				return 2
+		else:
+			chu = data
+
+
+		spChu = chu.split("\r\n")
+#		debugPrint("spChu num:[%d]" % len(spChu))
+		if len(spChu) == 1:
+			# still the rest of the data @1line
+			return 1
+
+		elif len(spChu) > 1:
+			i = 0
+			rtn = 1 # init 1
+			length = 0
+			while len(spChu) > i:
+#				debugPrint("[%s]" % str(spChu[i]))
+
+				if len(spChu[i]) != 0:
+					if self.__isHexCharOnly(spChu[i]):
+						gChunkedRemain = long(spChu[i], 16)
+						debugPrint("gChunkedRemain " + str(gChunkedRemain))
+						if gChunkedRemain == 0:
+							debugPrint("chunked data complete")
+							return 0
+					else:
+						if len(spChu[i]) == gChunkedRemain:
+							rtn = 1
+						elif len(spChu[i]) < gChunkedRemain:
+							gChunkedRemain = gChunkedRemain - len(spChu[i])
+							rtn = 1
+						else:
+							# unexpected error
+							return 2
+
+				i = i + 1
+
+		return rtn
+
+	def __isHexCharOnly(self, st):
+		if st is None or len(st) == 0:
+			debugPrint("isHexCharOnly false")
+			return False
+
+		i = 0
+		while len(st) > i:
+			if (not re.search(r'[0-9]', st[i])) and (not re.search(r'[a-f]', st[i], re.IGNORECASE)):
+				debugPrint("isHexCharOnly false")
+				return False
+			i = i + 1
+
+		debugPrint("isHexCharOnly true")
+		return True
+
+	# return tuple
+	#     tuple[0]: HTTP response body
+	#     tuple[1]: HTTP status code
+	def __sendrecv(self, addr, port, msg):
+		try:
+			sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+			sock.settimeout(5)
+			sock.connect((addr, port))
+			sock.send(msg)
+
+			buffTotal = ""
+			kind = -1
+			remain = 0
+			httpStatus = ""
+			crtn = 0
+
+			while True:
+				buff = self.__recvSocket(sock)
+				if buff is None:
+					break
+
+#				debugPrint("[" + buff + "]")
+				buffTotal = buffTotal + buff
+
+				if kind == -1 or kind == 3:
+					rtn = self.__checkHttpResponse(buffTotal)
+					debugPrint("checkHttpResponse " + str(rtn))
+					kind = rtn[0]
+					remain = rtn[1]
+					httpStatus = rtn[2]
+
+					if kind == 0:
+						# ok (all received)
+						break
+					elif kind == 1:
+						# still the rest of the data
+						continue
+					elif kind == 2:
+						# error
+						return (None, httpStatus)
+					elif kind == 3:
+						# header is not able to receive all
+						continue
+					elif kind == 4:
+						# chuked body
+						crtn = self.__checkChunkedData(buffTotal, True)
+						if crtn == 0:
+							# chunked data complete
+							break
+						elif crtn == 1:
+							# still the rest of the data @1line
+							continue
+						else:
+							# unexpected
+							return (None, httpStatus)
+
+				elif kind == 1:
+					if remain == len(buff):
+						debugPrint("remain == len(buff)")
+						break
+					elif remain > len(buff):
+						debugPrint("remain > len(buff)")
+						remain = remain - len(buff)
+						continue
+					else:
+						return (None, httpStatus)
+
+				elif kind == 4:
+					crtn = self.__checkChunkedData(buff, False)
+					if crtn == 0:
+						break
+					elif crtn == 1:
+						continue
+					else:
+						return (None, httpStatus)
+
+			sock.close()
+
+			if len(buffTotal) > 0:
+				res = HttpResponse(buffTotal)
+#				debugPrint(buffTotal)
+				body = res.read()
+				res.close()
+				return (body, httpStatus)
+			else:
+				return (None, httpStatus)
+
+		except socket.timeout:
+			sock.close()
+			debugPrint("tcp socket timeout")
+			return (None, "")
+
+		except:
+			sock.close()
+			putsExceptMsg()
+			return (None, "")
+
+	def getHttpContent(self, addr, url):
+		if addr is None or len(addr) == 0 or\
+			url is None or len(url) == 0:
+			return None
+
+		debugPrint(url)
+
+		port = 0
+		rtn = urlparse(url)
+		if rtn.port is None:
+			port = 80
+		else:
+			port = rtn.port
+		debugPrint("dst %s %d" % (addr, port))
+
+		compPath = ""
+		if len(rtn.query) > 0:
+			compPath = rtn.path + "?" + rtn.query
+		else:
+			compPath = rtn.path
+
+		compPath = re.sub("^/+", "/", compPath)
+
+		msg  = "GET " + compPath + " HTTP/1.1\r\n"
+		msg += "Host: %s:%s\r\n" % (addr, port)
+#		msg += "Connection: close\r\n"
+#		msg += "Connection: keep-alive\r\n"
+		msg += "\r\n"
+		debugPrint(msg)
+
+		return self.__sendrecv(addr, port, msg)
+
+	def postSoapAction(self, addr, url, actionInfo, reqArgList):
+		if addr is None or len(addr) == 0 or\
+			url is None or len(url) == 0 or\
+			reqArgList is None or\
+			actionInfo is None:
+			return None
+
+		debugPrint(url)
+
+		rtn = urlparse(url)
+		if rtn.port is None:
+			port = 80
+		else:
+			port = rtn.port
+		debugPrint("dst %s %d" % (addr, port))
+
+		compPath = ""
+		if len(rtn.query) > 0:
+			compPath = rtn.path + "?" + rtn.query
+		else:
+			compPath = rtn.path
+
+		compPath = re.sub("^/+", "/", compPath)
+
+
+		nameSpaceServiceType = actionInfo.getServiceType()
+		actionName = actionInfo.getName()
+
+		contentHeader        = "<?xml version=\"1.0\" encoding=\"utf-8\"?>\r\n"
+		contentHeader       += "<s:Envelope s:encodingStyle=\"%s\" xmlns:s=\"%s\">\r\n" % (ENCODING_STYLE_XMLSOAP, NAMESPACE_XMLSOAP_ENV)
+		contentBody          = "  <s:Body>\r\n"
+		contentBody         += "    <u:%s xmlns:u=\"%s\">\r\n" % (actionName, nameSpaceServiceType)
+		for ai in iter(actionInfo.getArgumentList()):
+			if ai.getDirection() == "in":
+				contentBody += "      <%s>%s</%s>\r\n" % (ai.getName(), reqArgList.pop(0), ai.getName())
+		contentBody         += "    </u:%s>\r\n" % (actionName)
+		contentBody         += "  </s:Body>\r\n"
+		contentFooter        = "</s:Envelope>\r\n"
+
+		contentLength = len(contentHeader) + len(contentBody) + len(contentFooter)
+
+		msg  = "POST " + compPath + " HTTP/1.1\r\n"
+		msg += "Host: %s:%s\r\n" % (addr, port)
+		msg += "Content-Type: text/xml; charset=\"utf-8\"\r\n"
+		msg += "Content-Length: %d\r\n" % contentLength
+		msg += "SOAPACTION: \"%s#%s\"\r\n" % (nameSpaceServiceType, actionName)
+		msg += "\r\n"
+
+#		msg  = "M-POST " + compPath + " HTTP/1.1\r\n"
+#		msg += "Host: %s:%s\r\n" % (addr, port)
+#		msg += "Content-Type: text/xml; charset=\"utf-8\"\r\n"
+#		msg += "Content-Length: %d\r\n" % contentLength
+#		msg += "MAN: \"%s\"; ns=01\r\n", NAMESPACE_XMLSOAP_ENV
+#		msg += "01-SOAPACTION: \"%s#%s\"\r\n" % (nameSpaceServiceType, actionName)
+#		msg += "\r\n"
+
+		msg += contentHeader
+		msg += contentBody
+		msg += contentFooter
+
+		debugPrint(msg)
+
+		return self.__sendrecv(addr, port, msg)
+
+	def getSoapResponse(self, xml, actionInfo):
+		resArgList = []
+
+		if xml is None or len(xml) == 0 or actionInfo is None:
+			return resArgList
+
+		if len(actionInfo.getArgumentList()) <= 0:
+			return resArgList
+
+		argList = actionInfo.getArgumentList()
+
+		#TODO
+#		xml = xml.replace("&quot;", "\"")
+#		xml = xml.replace("&amp;", "&")
+#		xml = xml.replace("&lt;", "<")
+#		xml = xml.replace("&gt;", ">")
+#		xml = xml.replace("&nbsp;", " ")
+#		debugPrint("[%s]" % xml)
+
+		rtn = ""
+		nameSpaceServiceType = actionInfo.getServiceType()
+		responseTagName = actionInfo.getName() + "Response"
+
+		try:
+			root = ElementTree.fromstring(xml)
+			if root is not None:
+				body = root.find(".//{%s}Body" % NAMESPACE_XMLSOAP_ENV)
+				if body is not None:
+					response = body.find(".//{%s}%s" % (nameSpaceServiceType, responseTagName))
+					if response is not None:
+
+						for ai in iter(argList):
+							if ai.getDirection() == "out":
+								debugPrint("find " + ai.getName())
+								val = response.find(".//%s" % ai.getName())
+								if val is not None:
+									resArgList.append(val.text)
+
+					else:
+						debugPrint("%s is none." % responseTagName)
+				else:
+					debugPrint("Body is none.")
+			else:
+				debugPrint("root is none.")
+
+			return resArgList
+
+		except:
+			putsExceptMsg()
+			return resArgList
+
+	def getSingleElement(self, xml, tag, namespace):
+		if xml is None or len(xml) == 0:
+			return ""
+		if tag is None or len(tag) == 0:
+			return ""
+
+		form = ".//{%s}%s" % (namespace, tag)
+		try:
+			root = ElementTree.fromstring(xml)
+			if root is not None:
+				rtn = root.find(form)
+				if rtn is not None:
+					debugPrint("getSingleElement:[%s]" % rtn.text)
+					return rtn.text
+
+			return ""
+
+		except:
+			putsExceptMsg()
+			return ""
+
+	# return tuple
+	#     tuple[0]: map
+	#     tuple[1]: status True/False 
+	def getServiceListMap(self, xml):
+		if xml is None or len(xml) == 0:
+			return ({}, False)
+
+		serviceListMap = {}
+
+		try:
+			root = ElementTree.fromstring(xml)
+			if root is not None:
+				listRoot = root.find(".//{%s}serviceList" % NAMESPACE_UPNP_DEVICE)
+				if listRoot is not None:
+					list = listRoot.findall(".//{%s}service" % NAMESPACE_UPNP_DEVICE)
+					if list is not None:
+						for i in iter(list):
+							type = i.find(".//{%s}serviceType" % NAMESPACE_UPNP_DEVICE).text
+							scpdUrl = i.find(".//{%s}SCPDURL" % NAMESPACE_UPNP_DEVICE).text
+							controlUrl = i.find(".//{%s}controlURL" % NAMESPACE_UPNP_DEVICE).text
+							eventSubUrl = i.find(".//{%s}eventSubURL" % NAMESPACE_UPNP_DEVICE).text
+
+							debugPrint("type:[" + str(type) + "]")
+							debugPrint("scpdUrl:[" + str(scpdUrl) + "]")
+							debugPrint("controlUrl:[" + str(controlUrl) + "]")
+							debugPrint("eventSubUrl:[" + str(eventSubUrl) + "]")
+
+							if type is not None and len(type) != 0:
+								# add hash map
+								serviceListMap[type] = ServiceInfo(type, scpdUrl, controlUrl, eventSubUrl)
+
+					else:
+						debugPrint("service is none.")
+				else:
+					debugPrint("serviceList is none.")
+			else:
+				debugPrint("root is none.")
+
+			return (serviceListMap, True)
+
+		except:
+			putsExceptMsg()
+			return (serviceListMap, False)
+
+	def getActionListMap(self, xml, type):
+		if xml is None or len(xml) == 0 or\
+			type is None or len(type) == 0:
+			return {}
+
+		actionListMap = {}
+
+		try:
+			root = ElementTree.fromstring(xml)
+			if root is not None:
+				listRoot = root.find(".//{%s}actionList" % NAMESPACE_UPNP_SERVICE)
+				if listRoot is not None:
+					list = listRoot.findall(".//{%s}action" % NAMESPACE_UPNP_SERVICE)
+					if list is not None:
+						for i in iter(list):
+							name = i.find(".//{%s}name" % NAMESPACE_UPNP_SERVICE).text
+							debugPrint("name:[" + str(name) + "]")
+
+							#------------ argument list ------------#
+							argumentList = []
+							argListRoot = i.find(".//{%s}argumentList" % NAMESPACE_UPNP_SERVICE)
+							if argListRoot is not None:
+								argList = argListRoot.findall(".//{%s}argument" % NAMESPACE_UPNP_SERVICE)
+								if argList is not None:
+									for ai in iter(argList):
+										argName = ai.find(".//{%s}name" % NAMESPACE_UPNP_SERVICE).text
+										argDirection = ai.find(".//{%s}direction" % NAMESPACE_UPNP_SERVICE).text
+										argRelatedStateVariable = ai.find(".//{%s}relatedStateVariable" % NAMESPACE_UPNP_SERVICE).text
+										argumentList.append(ArgumentInfo(argName, argDirection, argRelatedStateVariable))
+								else:
+									debugPrint("argument is none.")
+							else:
+								debugPrint("argumentList is none.")
+							#---------------------------------------#
+
+							if name is not None and len(name) != 0:
+								# add hash map
+								actionListMap[name] = ActionInfo(name, argumentList, type)
+
+					else:
+						debugPrint("action is none.")
+				else:
+					debugPrint("actionList is none.")
+			else:
+				debugPrint("root is none.")
+
+			return actionListMap
+
+		except:
+			putsExceptMsg()
+			return actionListMap
+
+	def __checkKeyNameDuplication(self, name, map, sp):
+		if map.has_key(name):
+			sp = sp + 1
+			name += "-%d" % sp
+			return self.__checkKeyNameDuplication(name, map, sp)
+		else:
+			return name
+
+	def getServiceStateTableMap(self, xml):
+		if xml is None or len(xml) == 0:
+			return {}
+
+		serviceStateTableMap = {}
+
+		try:
+			root = ElementTree.fromstring(xml)
+			if root is not None:
+				listRoot = root.find(".//{%s}serviceStateTable" % NAMESPACE_UPNP_SERVICE)
+				if listRoot is not None:
+					list = listRoot.findall(".//{%s}stateVariable" % NAMESPACE_UPNP_SERVICE)
+					if list is not None:
+						for i in iter(list):
+
+							isSendEvents = False
+							if i.attrib.has_key("sendEvents"):
+								debugPrint("attrib sendEvents:" + str(i.attrib["sendEvents"]))
+								if re.match(i.attrib["sendEvents"], "yes", re.IGNORECASE):
+									isSendEvents = True
+							else:
+								debugPrint("attrib does not have [sendEvents]")
+
+							name = i.find(".//{%s}name" % NAMESPACE_UPNP_SERVICE).text
+							dataType = i.find(".//{%s}dataType" % NAMESPACE_UPNP_SERVICE).text
+
+							defaultValue = ""
+							defaultValueRoot = i.find(".//{%s}defaultValue" % NAMESPACE_UPNP_SERVICE)
+							if defaultValueRoot is not None:
+								defaultValue = defaultValueRoot.text
+
+							#------------ allowed value list ------------#
+							allowedValueList = []
+							valueListRoot = i.find(".//{%s}allowedValueList" % NAMESPACE_UPNP_SERVICE)
+							if valueListRoot is not None:
+								valueList = valueListRoot.findall(".//{%s}allowedValue" % NAMESPACE_UPNP_SERVICE)
+								if valueList is not None:
+									for vl in iter(valueList):
+										allowedValueList.append(vl.text)
+								else:
+									debugPrint("allowedValue is none.")
+							else:
+								debugPrint("allowedValueList is none.")
+							#--------------------------------------------#
+
+							#------------ allowed value range ------------#
+							allowedValueRange = ()
+							allowedValueRangeMin = ""
+							allowedValueRangeMax = ""
+							allowedValueRangeStep = ""
+							valueRangeRoot = i.find(".//{%s}allowedValueRange" % NAMESPACE_UPNP_SERVICE)
+							if valueRangeRoot is not None:
+								valueMin = valueRangeRoot.find(".//{%s}minimum" % NAMESPACE_UPNP_SERVICE)
+								valueMax = valueRangeRoot.find(".//{%s}maximum" % NAMESPACE_UPNP_SERVICE)
+								valueStep = valueRangeRoot.find(".//{%s}step" % NAMESPACE_UPNP_SERVICE)
+								if valueMin is not None:
+									allowedValueRangeMin = valueMin.text
+								if valueMax is not None:
+									allowedValueRangeMax = valueMax.text
+								if valueStep is not None:
+									allowedValueRangeStep = valueStep.text
+
+								allowedValueRange = (allowedValueRangeMin, allowedValueRangeMax, allowedValueRangeStep)
+							else:
+								debugPrint("allowedValueRange is none.")
+							#---------------------------------------------#
+
+							if name is not None and len(name) != 0:
+								# add hash map
+								serviceStateTableMap[name] = ServiceStateInfo(name, dataType, defaultValue, allowedValueList, allowedValueRange, isSendEvents)
+
+					else:
+						debugPrint("stateVariable is none.")
+				else:
+					debugPrint("serviceStateTable is none.")
+			else:
+				debugPrint("root is none.")
+
+			return serviceStateTableMap
+
+		except:
+			putsExceptMsg()
+			return serviceStateTableMap
+
+class ControlPoint (BaseFunc):
+	def __init__(self, deviceInfo=None, serviceInfo=None, actionInfo=None, reqArgList=None):
+		self.__deviceInfo = deviceInfo
+		self.__serviceInfo = serviceInfo
+		self.__actionInfo = actionInfo
+		self.__reqArgList = reqArgList
+
+	def analyze (self):
+		if self.__deviceInfo is None:
+			return
+
+		deviceInfo = self.__deviceInfo
+
+		if deviceInfo.getState() is State.ANALYZING:
+			return
+
+		debugPrint("----------------------------------------------- analyze start. usn:[%s]" % deviceInfo.getUsn())
+		deviceInfo.setState(State.ANALYZING)
+
+		response = self.getHttpContent(deviceInfo.getIpAddr(), deviceInfo.getLocUrl())
+		responseLocBody = response[0]
+		responseStatusCode = response[1]
+
+		if responseLocBody is not None:
+			deviceInfo.setLocBody(responseLocBody)
+
+			urlBase = self.getSingleElement(responseLocBody, "URLBase", NAMESPACE_UPNP_DEVICE)
+			udn = self.getSingleElement(responseLocBody, "UDN", NAMESPACE_UPNP_DEVICE)
+			flName = self.getSingleElement(responseLocBody, "friendlyName", NAMESPACE_UPNP_DEVICE)
+			devType = self.getSingleElement(responseLocBody, "deviceType", NAMESPACE_UPNP_DEVICE)
+			manuName = self.getSingleElement(responseLocBody, "manufacturer", NAMESPACE_UPNP_DEVICE)
+			dlnaType = self.getSingleElement(responseLocBody, "X_DLNADOC", NAMESPACE_DLNA_DEVICE)
+
+			deviceInfo.setUrlBase(urlBase)
+			deviceInfo.setUdn(udn)
+			deviceInfo.setFriendlyName(flName)
+			deviceInfo.setDeviceType(devType)
+			deviceInfo.setManufactureName(manuName)
+			deviceInfo.setDlnaType(dlnaType)
+
+			numSuccessGetScpd = 0
+
+			result = self.getServiceListMap(responseLocBody)
+			serviceListMap = result[0]
+			status = result[1]
+			if len(serviceListMap) > 0:
+				deviceInfo.setServiceListMap(serviceListMap)
+
+				base = ""
+				if len(urlBase) > 0:
+					base = urlBase
+				else:
+					base = deviceInfo.getLocUrlBase()
+
+				base = re.sub("/$", "", base)
+
+				for key in serviceListMap:
+					serviceInfo = serviceListMap[key]
+					url = ""
+
+					if serviceInfo.getScpdUrl() is None or len(serviceInfo.getScpdUrl()) == 0:
+						continue
+
+					o = urlparse(serviceInfo.getScpdUrl())
+					if len(o.scheme) == 0:
+						scpd = ""
+						if not re.search("^/", serviceInfo.getScpdUrl()):
+							scpd = "/" + serviceInfo.getScpdUrl()
+						else:
+							scpd = serviceInfo.getScpdUrl()
+						url = base + scpd
+					else:
+						url = serviceInfo.getScpdUrl()
+
+					responseScpd = self.getHttpContent(deviceInfo.getIpAddr(), url)
+					responseScpdBody = responseScpd[0]
+					responseScpdStatus = responseScpd[1]
+#					debugPrint(str(responseScpdBody))
+					if responseScpdBody is not None:
+						serviceInfo.setScpdBody(responseScpdBody)
+
+						actListMap = self.getActionListMap(responseScpdBody, serviceInfo.getType())
+						if len(actListMap) > 0:
+							serviceInfo.setActionListMap(actListMap)
+
+						sstm = self.getServiceStateTableMap(responseScpdBody)
+						if len(sstm) > 0:
+							serviceInfo.setServiceStateTableMap(sstm)
+
+						numSuccessGetScpd = numSuccessGetScpd + 1
+
+			if status:
+				deviceInfo.setState(State.ANALYZED)
+
+				if numSuccessGetScpd == len(serviceListMap):
+					rsltSuccessPerTotal = " %d/%d" % (numSuccessGetScpd, len(serviceListMap))
+				else:
+					rsltSuccessPerTotal = "*%d/%d" % (numSuccessGetScpd, len(serviceListMap))
+				deviceInfo.setSuccessPerGetScpd(rsltSuccessPerTotal)
+			else:
+				# getServiceListMap() error
+				deviceInfo.setState(State.ERROR)
+		else:
+			# location content HTTP error
+			deviceInfo.setState(State.ERROR)
+
+	# return tuple
+	#     tuple[0]: resArgList
+	#     tuple[1]: HTTP status code
+	#     tuple[2]: HTTP response body
+	def action (self):
+		if self.__deviceInfo is None or\
+			self.__serviceInfo is None or\
+			self.__actionInfo is None or\
+			self.__reqArgList is None:
+			return (None, None, None)
+
+		deviceInfo = self.__deviceInfo
+		serviceInfo = self.__serviceInfo
+		actionInfo = self.__actionInfo
+		reqArgList = self.__reqArgList
+
+		base = ""
+		if len(deviceInfo.getUrlBase()) > 0:
+			base = deviceInfo.getUrlBase()
+		else:
+			base = deviceInfo.getLocUrlBase()
+
+		base = re.sub("/$", "", base)
+
+		url = ""
+		o = urlparse(serviceInfo.getControlUrl())
+		if len(o.scheme) == 0:
+			ctrlUrl = ""
+			if not re.search("^/", serviceInfo.getControlUrl()):
+				ctrlUrl = "/" + serviceInfo.getControlUrl()
+			else:
+				ctrlUrl = serviceInfo.getControlUrl()
+			url = base + ctrlUrl
+		else:
+			url = serviceInfo.getControlUrl()
+
+		response = self.postSoapAction(deviceInfo.getIpAddr(), url, actionInfo, reqArgList)
+		responseBody = response[0]
+		responseStatus = response[1]
+		debugPrint("[%s]" % responseBody)
+
+		resArgList = []
+		if re.match("200 +OK", responseStatus, re.IGNORECASE):
+			resArgList = self.getSoapResponse(responseBody, actionInfo)
+
+		return (resArgList, responseStatus, responseBody)
 
 def msearch(timeout):
 	print "start M-SEARCH."
@@ -843,655 +1699,11 @@ def msearch(timeout):
 	if len(queuingList) > 0:
 		print "analysis in background..."
 		for it in iter(queuingList):
-			sendAsyncMessageFromMsearch(analyze, True, it, Priority.MID)
+			Message().sendAsyncFromMsearch(analyze, True, it, Priority.MID)
 	else:
 		print "result of M-SEARCH is not found anything..."
 
 	del queuingList
-
-def recvSocket(sock):
-	debugPrint("recvSocket")
-	totalData = ""
-	isContinue = False
-
-	while True:
-		data = sock.recv(65536)
-		if not data:
-			debugPrint("disconnected from server")
-			# TODO
-			if len(totalData) > 0:
-				return totalData
-			else:
-				return None
-
-		debugPrint("sock.recv size " + str(len(data)))
-		totalData += data
-
-		# timeout 50mS
-		readfds = set([sock])
-		rList, wList, xList = select.select(readfds, [], [], 0.05)
-		for r in iter(rList):
-			if r == sock:
-				debugPrint("sock in rList")
-				isContinue = True
-
-		if isContinue:
-			isContinue = False
-			continue
-		else:
-			break
-
-	return totalData
-
-# return tuple
-#     tuple[0]: return code
-#               0: ok (all received)
-#               1: still the rest of the data
-#               2: error
-#               3: header is not able to receive all
-#               4: chuked body
-#     tuple[1]: remain size (return code is valid only when the 1)
-#     tuple[2]: HTTP status code
-def checkHttpResponse(buff):
-	isHeaderReceived = False
-	term = ""
-	httpStatus = ""
-
-	# check whether it has header reception completion
-	if buff.find("\r\n\r\n") >= 0:
-		isHeaderReceived = True
-		term = "\r\n"
-	else:
-		if buff.find("\n\n") >= 0:
-			isHeaderReceived = True
-			term = "\n"
-		else:
-			isHeaderReceived = False
-
-	debugPrint("is all header received ? --> " + str(isHeaderReceived))
-	if isHeaderReceived:
-		res = HttpResponse(buff)
-		debugPrint("res status %d %s" % (res.status, res.reason))
-		httpStatus = "%d %s" % (res.status, res.reason)
-#		if res.status != 200:
-#			# error
-#			return (2, 0, httpStatus)
-
-		cl = res.getheader("Content-Length")
-		debugPrint("content length ------- " + str(cl))
-		if cl is not None:
-			spBuff = buff.split(term+term)
-			if len(spBuff) >= 2:
-
-				# check spBuff data
-				length = 0
-				for i in range(0, len(spBuff)):
-					if i != 0:
-						length = length + len(spBuff[i])
-						if i >= 2:
-							length = length + len(term+term)
-				debugPrint("current content length %d" % length)
-
-				if long(cl) == length:
-					# all received
-					debugPrint("all received")
-					return (0, 0, httpStatus)
-				elif long(cl) > length:
-					# still the rest of the data
-					debugPrint("still the rest of the data")
-					return (1, long(cl) - length, httpStatus)
-				else:
-					# error
-					debugPrint("error")
-					return (2, 0, httpStatus)
-			else:
-				# unexpected
-				debugPrint("term split is unexpected.  len(spBuff) " + str(len(spBuff)))
-				debugPrint("[" + buff + "]")
-				return (2, 0, httpStatus)
-
-		else:
-			te = res.getheader("Transfer-Encoding")
-			debugPrint("transfer encoding ------- " + str(te))
-			if te is not None:
-				if re.match("chunked", te, re.IGNORECASE):
-					# chunked
-					return (4, 0, httpStatus)
-				else:
-					#TODO
-					# only chunked
-					return (2, 0, httpStatus)
-			else:
-				debugPrint("[" + buff + "]")
-				#TODO
-				# Content-Length, Transfer-Encoding can not both exist
-				return (0, 0, httpStatus)
-
-	else:
-		# header is not able to receive all
-		debugPrint("header is not able to receive all")
-		debugPrint("[" + buff + "]")
-		return (3, 0, httpStatus)
-
-def checkChunkedData(data, isFirst):
-	debugPrint("checkChunkedData")
-
-	global gChunkedRemain
-	chu = ""
-	if isFirst:
-		gChunkedRemain = 0
-
-		spData = data.split("\r\n\r\n")
-		if len(spData) >= 2:
-			chu = spData[1];
-		else:
-			# unexpected
-			return 2
-	else:
-		chu = data
-
-
-	spChu = chu.split("\r\n")
-#	debugPrint("spChu num:[%d]" % len(spChu))
-	if len(spChu) == 1:
-		# still the rest of the data @1line
-		return 1
-
-	elif len(spChu) > 1:
-		i = 0
-		rtn = 1 # init 1
-		length = 0
-		while len(spChu) > i:
-#			debugPrint("[%s]" % str(spChu[i]))
-
-			if len(spChu[i]) != 0:
-				if isHexCharOnly(spChu[i]):
-					gChunkedRemain = long(spChu[i], 16)
-					debugPrint("gChunkedRemain " + str(gChunkedRemain))
-					if gChunkedRemain == 0:
-						debugPrint("chunked data complete")
-						return 0
-				else:
-					if len(spChu[i]) == gChunkedRemain:
-						rtn = 1
-					elif len(spChu[i]) < gChunkedRemain:
-						gChunkedRemain = gChunkedRemain - len(spChu[i])
-						rtn = 1
-					else:
-						# unexpected error
-						return 2
-
-			i = i + 1
-
-	return rtn
-
-def isHexCharOnly(st):
-	if st is None or len(st) == 0:
-		debugPrint("isHexCharOnly false")
-		return False
-
-	i = 0
-	while len(st) > i:
-		if (not re.search(r'[0-9]', st[i])) and (not re.search(r'[a-f]', st[i], re.IGNORECASE)):
-			debugPrint("isHexCharOnly false")
-			return False
-		i = i + 1
-
-	debugPrint("isHexCharOnly true")
-	return True
-
-# return tuple
-#     tuple[0]: HTTP response body
-#     tuple[1]: HTTP status code
-def sendrecv(addr, port, msg):
-	try:
-		sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-		sock.settimeout(5)
-		sock.connect((addr, port))
-		sock.send(msg)
-
-		buffTotal = ""
-		kind = -1
-		remain = 0
-		httpStatus = ""
-		crtn = 0
-
-		while True:
-			buff = recvSocket(sock)
-			if buff is None:
-				break
-
-#			debugPrint("[" + buff + "]")
-			buffTotal = buffTotal + buff
-
-			if kind == -1 or kind == 3:
-				rtn = checkHttpResponse(buffTotal)
-				debugPrint("checkHttpResponse " + str(rtn))
-				kind = rtn[0]
-				remain = rtn[1]
-				httpStatus = rtn[2]
-
-				if kind == 0:
-					# ok (all received)
-					break
-				elif kind == 1:
-					# still the rest of the data
-					continue
-				elif kind == 2:
-					# error
-					return (None, httpStatus)
-				elif kind == 3:
-					# header is not able to receive all
-					continue
-				elif kind == 4:
-					# chuked body
-					crtn = checkChunkedData(buffTotal, True)
-					if crtn == 0:
-						# chunked data complete
-						break
-					elif crtn == 1:
-						# still the rest of the data @1line
-						continue
-					else:
-						# unexpected
-						return (None, httpStatus)
-
-			elif kind == 1:
-				if remain == len(buff):
-					debugPrint("remain == len(buff)")
-					break
-				elif remain > len(buff):
-					debugPrint("remain > len(buff)")
-					remain = remain - len(buff)
-					continue
-				else:
-					return (None, httpStatus)
-
-			elif kind == 4:
-				crtn = checkChunkedData(buff, False)
-				if crtn == 0:
-					break
-				elif crtn == 1:
-					continue
-				else:
-					return (None, httpStatus)
-
-		sock.close()
-
-		if len(buffTotal) > 0:
-			res = HttpResponse(buffTotal)
-#			debugPrint(buffTotal)
-			body = res.read()
-			res.close()
-			return (body, httpStatus)
-		else:
-			return (None, httpStatus)
-
-	except socket.timeout:
-		sock.close()
-		debugPrint("tcp socket timeout")
-		return (None, "")
-
-	except:
-		sock.close()
-		putsExceptMsg()
-		return (None, "")
-
-def getHttpContent(addr, url):
-	if addr is None or len(addr) == 0 or\
-		url is None or len(url) == 0:
-		return None
-
-	debugPrint(url)
-
-	port = 0
-	rtn = urlparse(url)
-	if rtn.port is None:
-		port = 80
-	else:
-		port = rtn.port
-	debugPrint("dst %s %d" % (addr, port))
-
-	compPath = ""
-	if len(rtn.query) > 0:
-		compPath = rtn.path + "?" + rtn.query
-	else:
-		compPath = rtn.path
-
-	compPath = re.sub("^/+", "/", compPath)
-
-	msg  = "GET " + compPath + " HTTP/1.1\r\n"
-	msg += "Host: %s:%s\r\n" % (addr, port)
-#	msg += "Connection: close\r\n"
-#	msg += "Connection: keep-alive\r\n"
-	msg += "\r\n"
-	debugPrint(msg)
-
-	return sendrecv(addr, port, msg)
-
-def postSoapAction(addr, url, actionInfo, reqArgList):
-	if addr is None or len(addr) == 0 or\
-		url is None or len(url) == 0 or\
-		reqArgList is None or\
-		actionInfo is None:
-		return None
-
-	debugPrint(url)
-
-	rtn = urlparse(url)
-	if rtn.port is None:
-		port = 80
-	else:
-		port = rtn.port
-	debugPrint("dst %s %d" % (addr, port))
-
-	compPath = ""
-	if len(rtn.query) > 0:
-		compPath = rtn.path + "?" + rtn.query
-	else:
-		compPath = rtn.path
-
-	compPath = re.sub("^/+", "/", compPath)
-
-
-	nameSpaceServiceType = actionInfo.getServiceType()
-	actionName = actionInfo.getName()
-
-	contentHeader        = "<?xml version=\"1.0\" encoding=\"utf-8\"?>\r\n"
-	contentHeader       += "<s:Envelope s:encodingStyle=\"%s\" xmlns:s=\"%s\">\r\n" % (ENCODING_STYLE_XMLSOAP, NAMESPACE_XMLSOAP_ENV)
-	contentBody          = "  <s:Body>\r\n"
-	contentBody         += "    <u:%s xmlns:u=\"%s\">\r\n" % (actionName, nameSpaceServiceType)
-	for ai in iter(actionInfo.getArgumentList()):
-		if ai.getDirection() == "in":
-			contentBody += "      <%s>%s</%s>\r\n" % (ai.getName(), reqArgList.pop(0), ai.getName())
-	contentBody         += "    </u:%s>\r\n" % (actionName)
-	contentBody         += "  </s:Body>\r\n"
-	contentFooter        = "</s:Envelope>\r\n"
-
-	contentLength = len(contentHeader) + len(contentBody) + len(contentFooter)
-
-	msg  = "POST " + compPath + " HTTP/1.1\r\n"
-	msg += "Host: %s:%s\r\n" % (addr, port)
-	msg += "Content-Type: text/xml; charset=\"utf-8\"\r\n"
-	msg += "Content-Length: %d\r\n" % contentLength
-	msg += "SOAPACTION: \"%s#%s\"\r\n" % (nameSpaceServiceType, actionName)
-	msg += "\r\n"
-
-#	msg  = "M-POST " + compPath + " HTTP/1.1\r\n"
-#	msg += "Host: %s:%s\r\n" % (addr, port)
-#	msg += "Content-Type: text/xml; charset=\"utf-8\"\r\n"
-#	msg += "Content-Length: %d\r\n" % contentLength
-#	msg += "MAN: \"%s\"; ns=01\r\n", NAMESPACE_XMLSOAP_ENV
-#	msg += "01-SOAPACTION: \"%s#%s\"\r\n" % (nameSpaceServiceType, actionName)
-#	msg += "\r\n"
-
-	msg += contentHeader
-	msg += contentBody
-	msg += contentFooter
-
-	debugPrint(msg)
-
-	return sendrecv(addr, port, msg)
-
-def getSoapResponse(xml, actionInfo):
-	resArgList = []
-
-	if xml is None or len(xml) == 0 or actionInfo is None:
-		return resArgList
-
-	if len(actionInfo.getArgumentList()) <= 0:
-		return resArgList
-
-	argList = actionInfo.getArgumentList()
-
-	#TODO
-#	xml = xml.replace("&quot;", "\"")
-#	xml = xml.replace("&amp;", "&")
-#	xml = xml.replace("&lt;", "<")
-#	xml = xml.replace("&gt;", ">")
-#	xml = xml.replace("&nbsp;", " ")
-#	debugPrint("[%s]" % xml)
-
-	rtn = ""
-	nameSpaceServiceType = actionInfo.getServiceType()
-	responseTagName = actionInfo.getName() + "Response"
-
-	try:
-		root = ElementTree.fromstring(xml)
-		if root is not None:
-			body = root.find(".//{%s}Body" % NAMESPACE_XMLSOAP_ENV)
-			if body is not None:
-				response = body.find(".//{%s}%s" % (nameSpaceServiceType, responseTagName))
-				if response is not None:
-
-					for ai in iter(argList):
-						if ai.getDirection() == "out":
-							debugPrint("find " + ai.getName())
-							val = response.find(".//%s" % ai.getName())
-							if val is not None:
-								resArgList.append(val.text)
-
-				else:
-					debugPrint("%s is none." % responseTagName)
-			else:
-				debugPrint("Body is none.")
-		else:
-			debugPrint("root is none.")
-
-		return resArgList
-
-	except:
-		putsExceptMsg()
-		return resArgList
-
-def getSingleElement(xml, tag, namespace):
-	if xml is None or len(xml) == 0:
-		return ""
-	if tag is None or len(tag) == 0:
-		return ""
-
-	form = ".//{%s}%s" % (namespace, tag)
-	try:
-		root = ElementTree.fromstring(xml)
-		if root is not None:
-			rtn = root.find(form)
-			if rtn is not None:
-				debugPrint("getSingleElement:[%s]" % rtn.text)
-				return rtn.text
-
-		return ""
-
-	except:
-		putsExceptMsg()
-		return ""
-
-# return tuple
-#     tuple[0]: map
-#     tuple[1]: status True/False 
-def getServiceListMap(xml):
-	if xml is None or len(xml) == 0:
-		return ({}, False)
-
-	serviceListMap = {}
-
-	try:
-		root = ElementTree.fromstring(xml)
-		if root is not None:
-			listRoot = root.find(".//{%s}serviceList" % NAMESPACE_UPNP_DEVICE)
-			if listRoot is not None:
-				list = listRoot.findall(".//{%s}service" % NAMESPACE_UPNP_DEVICE)
-				if list is not None:
-					for i in iter(list):
-						type = i.find(".//{%s}serviceType" % NAMESPACE_UPNP_DEVICE).text
-						scpdUrl = i.find(".//{%s}SCPDURL" % NAMESPACE_UPNP_DEVICE).text
-						controlUrl = i.find(".//{%s}controlURL" % NAMESPACE_UPNP_DEVICE).text
-						eventSubUrl = i.find(".//{%s}eventSubURL" % NAMESPACE_UPNP_DEVICE).text
-
-						debugPrint("type:[" + str(type) + "]")
-						debugPrint("scpdUrl:[" + str(scpdUrl) + "]")
-						debugPrint("controlUrl:[" + str(controlUrl) + "]")
-						debugPrint("eventSubUrl:[" + str(eventSubUrl) + "]")
-
-						if type is not None and len(type) != 0:
-							# add hash map
-							serviceListMap[type] = ServiceInfo(type, scpdUrl, controlUrl, eventSubUrl)
-
-				else:
-					debugPrint("service is none.")
-			else:
-				debugPrint("serviceList is none.")
-		else:
-			debugPrint("root is none.")
-
-		return (serviceListMap, True)
-
-	except:
-		putsExceptMsg()
-		return (serviceListMap, False)
-
-def getActionListMap(xml, type):
-	if xml is None or len(xml) == 0 or\
-		type is None or len(type) == 0:
-		return {}
-
-	actionListMap = {}
-
-	try:
-		root = ElementTree.fromstring(xml)
-		if root is not None:
-			listRoot = root.find(".//{%s}actionList" % NAMESPACE_UPNP_SERVICE)
-			if listRoot is not None:
-				list = listRoot.findall(".//{%s}action" % NAMESPACE_UPNP_SERVICE)
-				if list is not None:
-					for i in iter(list):
-						name = i.find(".//{%s}name" % NAMESPACE_UPNP_SERVICE).text
-						debugPrint("name:[" + str(name) + "]")
-
-						#------------ argument list ------------#
-						argumentList = []
-						argListRoot = i.find(".//{%s}argumentList" % NAMESPACE_UPNP_SERVICE)
-						if argListRoot is not None:
-							argList = argListRoot.findall(".//{%s}argument" % NAMESPACE_UPNP_SERVICE)
-							if argList is not None:
-								for ai in iter(argList):
-									argName = ai.find(".//{%s}name" % NAMESPACE_UPNP_SERVICE).text
-									argDirection = ai.find(".//{%s}direction" % NAMESPACE_UPNP_SERVICE).text
-									argRelatedStateVariable = ai.find(".//{%s}relatedStateVariable" % NAMESPACE_UPNP_SERVICE).text
-									argumentList.append(ArgumentInfo(argName, argDirection, argRelatedStateVariable))
-							else:
-								debugPrint("argument is none.")
-						else:
-							debugPrint("argumentList is none.")
-						#---------------------------------------#
-
-						if name is not None and len(name) != 0:
-							# add hash map
-							actionListMap[name] = ActionInfo(name, argumentList, type)
-
-				else:
-					debugPrint("action is none.")
-			else:
-				debugPrint("actionList is none.")
-		else:
-			debugPrint("root is none.")
-
-		return actionListMap
-
-	except:
-		putsExceptMsg()
-		return actionListMap
-
-def checkKeyNameDuplication(name, map, sp):
-	if map.has_key(name):
-		sp = sp + 1
-		name += "-%d" % sp
-		return checkKeyNameDuplication(name, map, sp)
-	else:
-		return name
-
-def getServiceStateTableMap(xml):
-	if xml is None or len(xml) == 0:
-		return {}
-
-	serviceStateTableMap = {}
-
-	try:
-		root = ElementTree.fromstring(xml)
-		if root is not None:
-			listRoot = root.find(".//{%s}serviceStateTable" % NAMESPACE_UPNP_SERVICE)
-			if listRoot is not None:
-				list = listRoot.findall(".//{%s}stateVariable" % NAMESPACE_UPNP_SERVICE)
-				if list is not None:
-					for i in iter(list):
-
-						isSendEvents = False
-						if i.attrib.has_key("sendEvents"):
-							debugPrint("attrib sendEvents:" + str(i.attrib["sendEvents"]))
-							if re.match(i.attrib["sendEvents"], "yes", re.IGNORECASE):
-								isSendEvents = True
-						else:
-							debugPrint("attrib does not have [sendEvents]")
-
-						name = i.find(".//{%s}name" % NAMESPACE_UPNP_SERVICE).text
-						dataType = i.find(".//{%s}dataType" % NAMESPACE_UPNP_SERVICE).text
-
-						defaultValue = ""
-						defaultValueRoot = i.find(".//{%s}defaultValue" % NAMESPACE_UPNP_SERVICE)
-						if defaultValueRoot is not None:
-							defaultValue = defaultValueRoot.text
-
-						#------------ allowed value list ------------#
-						allowedValueList = []
-						valueListRoot = i.find(".//{%s}allowedValueList" % NAMESPACE_UPNP_SERVICE)
-						if valueListRoot is not None:
-							valueList = valueListRoot.findall(".//{%s}allowedValue" % NAMESPACE_UPNP_SERVICE)
-							if valueList is not None:
-								for vl in iter(valueList):
-									allowedValueList.append(vl.text)
-							else:
-								debugPrint("allowedValue is none.")
-						else:
-							debugPrint("allowedValueList is none.")
-						#--------------------------------------------#
-
-						#------------ allowed value range ------------#
-						allowedValueRange = ()
-						allowedValueRangeMin = ""
-						allowedValueRangeMax = ""
-						allowedValueRangeStep = ""
-						valueRangeRoot = i.find(".//{%s}allowedValueRange" % NAMESPACE_UPNP_SERVICE)
-						if valueRangeRoot is not None:
-							valueMin = valueRangeRoot.find(".//{%s}minimum" % NAMESPACE_UPNP_SERVICE)
-							valueMax = valueRangeRoot.find(".//{%s}maximum" % NAMESPACE_UPNP_SERVICE)
-							valueStep = valueRangeRoot.find(".//{%s}step" % NAMESPACE_UPNP_SERVICE)
-							if valueMin is not None:
-								allowedValueRangeMin = valueMin.text
-							if valueMax is not None:
-								allowedValueRangeMax = valueMax.text
-							if valueStep is not None:
-								allowedValueRangeStep = valueStep.text
-
-							allowedValueRange = (allowedValueRangeMin, allowedValueRangeMax, allowedValueRangeStep)
-						else:
-							debugPrint("allowedValueRange is none.")
-						#---------------------------------------------#
-
-						if name is not None and len(name) != 0:
-							# add hash map
-							serviceStateTableMap[name] = ServiceStateInfo(name, dataType, defaultValue, allowedValueList, allowedValueRange, isSendEvents)
-
-				else:
-					debugPrint("stateVariable is none.")
-			else:
-				debugPrint("serviceStateTable is none.")
-		else:
-			debugPrint("root is none.")
-
-		return serviceStateTableMap
-
-	except:
-		putsExceptMsg()
-		return serviceStateTableMap
 
 def analyze(deviceInfo):
 	if deviceInfo is None:
@@ -1500,97 +1712,10 @@ def analyze(deviceInfo):
 	if deviceInfo.getState() is State.ANALYZING:
 		return
 
-	debugPrint("----------------------------------------------- analyze start. usn:[%s]" % deviceInfo.getUsn())
-	deviceInfo.setState(State.ANALYZING)
+	cp = ControlPoint (deviceInfo)
+	cp.analyze()
 
-	response = getHttpContent(deviceInfo.getIpAddr(), deviceInfo.getLocUrl())
-	responseLocBody = response[0]
-	responseStatusCode = response[1]
-
-	if responseLocBody is not None:
-		deviceInfo.setLocBody(responseLocBody)
-
-		urlBase = getSingleElement(responseLocBody, "URLBase", NAMESPACE_UPNP_DEVICE)
-		udn = getSingleElement(responseLocBody, "UDN", NAMESPACE_UPNP_DEVICE)
-		flName = getSingleElement(responseLocBody, "friendlyName", NAMESPACE_UPNP_DEVICE)
-		devType = getSingleElement(responseLocBody, "deviceType", NAMESPACE_UPNP_DEVICE)
-		manuName = getSingleElement(responseLocBody, "manufacturer", NAMESPACE_UPNP_DEVICE)
-		dlnaType = getSingleElement(responseLocBody, "X_DLNADOC", NAMESPACE_DLNA_DEVICE)
-
-		deviceInfo.setUrlBase(urlBase)
-		deviceInfo.setUdn(udn)
-		deviceInfo.setFriendlyName(flName)
-		deviceInfo.setDeviceType(devType)
-		deviceInfo.setManufactureName(manuName)
-		deviceInfo.setDlnaType(dlnaType)
-
-		numSuccessGetScpd = 0
-
-		result = getServiceListMap(responseLocBody)
-		serviceListMap = result[0]
-		status = result[1]
-		if len(serviceListMap) > 0:
-			deviceInfo.setServiceListMap(serviceListMap)
-
-			base = ""
-			if len(urlBase) > 0:
-				base = urlBase
-			else:
-				base = deviceInfo.getLocUrlBase()
-
-			base = re.sub("/$", "", base)
-
-			for key in serviceListMap:
-				serviceInfo = serviceListMap[key]
-				url = ""
-
-				if serviceInfo.getScpdUrl() is None or len(serviceInfo.getScpdUrl()) == 0:
-					continue
-
-				o = urlparse(serviceInfo.getScpdUrl())
-				if len(o.scheme) == 0:
-					scpd = ""
-					if not re.search("^/", serviceInfo.getScpdUrl()):
-						scpd = "/" + serviceInfo.getScpdUrl()
-					else:
-						scpd = serviceInfo.getScpdUrl()
-					url = base + scpd
-				else:
-					url = serviceInfo.getScpdUrl()
-
-				responseScpd = getHttpContent(deviceInfo.getIpAddr(), url)
-				responseScpdBody = responseScpd[0]
-				responseScpdStatus = responseScpd[1]
-#				debugPrint(str(responseScpdBody))
-				if responseScpdBody is not None:
-					serviceInfo.setScpdBody(responseScpdBody)
-
-					actListMap = getActionListMap(responseScpdBody, serviceInfo.getType())
-					if len(actListMap) > 0:
-						serviceInfo.setActionListMap(actListMap)
-
-					sstm = getServiceStateTableMap(responseScpdBody)
-					if len(sstm) > 0:
-						serviceInfo.setServiceStateTableMap(sstm)
-
-					numSuccessGetScpd = numSuccessGetScpd + 1
-
-		if status:
-			deviceInfo.setState(State.ANALYZED)
-
-			if numSuccessGetScpd == len(serviceListMap):
-				rsltSuccessPerTotal = " %d/%d" % (numSuccessGetScpd, len(serviceListMap))
-			else:
-				rsltSuccessPerTotal = "*%d/%d" % (numSuccessGetScpd, len(serviceListMap))
-			deviceInfo.setSuccessPerGetScpd(rsltSuccessPerTotal)
-		else:
-			# getServiceListMap() error
-			deviceInfo.setState(State.ERROR)
-	else:
-		# location content HTTP error
-		deviceInfo.setState(State.ERROR)
-
-# args is tupple. for sendSyncMessage
+# args is tupple. for Message().sendSync()
 #
 # return tuple
 #     tuple[0]: resArgList
@@ -1602,36 +1727,8 @@ def actionInnerWrapper(args):
 	actionInfo = args[2]
 	reqArgList = args[3]
 
-	base = ""
-	if len(deviceInfo.getUrlBase()) > 0:
-		base = deviceInfo.getUrlBase()
-	else:
-		base = deviceInfo.getLocUrlBase()
-
-	base = re.sub("/$", "", base)
-
-	url = ""
-	o = urlparse(serviceInfo.getControlUrl())
-	if len(o.scheme) == 0:
-		ctrlUrl = ""
-		if not re.search("^/", serviceInfo.getControlUrl()):
-			ctrlUrl = "/" + serviceInfo.getControlUrl()
-		else:
-			ctrlUrl = serviceInfo.getControlUrl()
-		url = base + ctrlUrl
-	else:
-		url = serviceInfo.getControlUrl()
-
-	response = postSoapAction(deviceInfo.getIpAddr(), url, actionInfo, reqArgList)
-	responseBody = response[0]
-	responseStatus = response[1]
-	debugPrint("[%s]" % responseBody)
-
-	resArgList = []
-	if re.match("200 +OK", responseStatus, re.IGNORECASE):
-		resArgList = getSoapResponse(responseBody, actionInfo)
-
-	return (resArgList, responseStatus, responseBody)
+	cp = ControlPoint (deviceInfo, serviceInfo, actionInfo, reqArgList)
+	return cp.action()
 
 def actionInner(deviceInfo, serviceType):
 	if deviceInfo is None or\
@@ -1685,7 +1782,7 @@ def actionInner(deviceInfo, serviceType):
 		print ""
 
 		argTuple = (deviceInfo, serviceInfo, serviceInfo.getActionListMap()[act], reqArgList)
-		rtn = sendSyncMessage(actionInnerWrapper, True, argTuple, True, Priority.HIGH)
+		rtn = Message().sendSync(actionInnerWrapper, True, argTuple, True, Priority.HIGH)
 		resArgList = rtn[0]
 		responseStatus = rtn[1]
 		responseBody = rtn[2]
@@ -1882,7 +1979,7 @@ def info(arg):
 def manualAnalyze(arg):
 	if gDeviceInfoMap.has_key(arg):
 		info = gDeviceInfoMap[arg]
-		sendAsyncMessage(analyze, True, info, Priority.HIGH)
+		Message().sendAsync(analyze, True, info, Priority.HIGH)
 	else:
 		print "not found..."
 
@@ -1928,7 +2025,12 @@ def putsGlobalState():
 	if gMRThread.isEnable():
 		print "Multicast receive: [running]"
 	else:
-		print "Multicast receive: [suspending]"
+		print "Multicast receive: [stop]"
+
+	if gTimerThread.isEnable():
+		print "Cache-Control: [enable]"
+	else:
+		print "Cache-Control: [disable]"
 
 	if gIsDebugPrint:
 		print "debug print: [on]"
@@ -1937,46 +2039,29 @@ def putsGlobalState():
 
 	print "--------------------------------"
 
-def sendSyncMessage(cbFunc, isNeedArg, arg, isNeedRtnVal, priority):
-	if cbFunc is None or\
-		isNeedArg is None or\
-		isNeedRtnVal is None or\
-		priority is None or\
-		gBaseQue is None:
-		return
-
-	uniqQue = UniqQue()
-	msg = MessageObject(cbFunc, isNeedArg, arg, uniqQue, isNeedRtnVal, priority, None)
-	gBaseQue.enQue(msg)
-	return uniqQue.receive()
-
-def sendAsyncMessage(cbFunc, isNeedArg, arg, priority):
-	if cbFunc is None or\
-		isNeedArg is None or\
-		priority is None or\
-		gBaseQue is None:
-		return
-
-	msg = MessageObject(cbFunc, isNeedArg, arg, None, False, priority, None)
-	gBaseQue.enQue(msg)
-
-# for msearch
-def sendAsyncMessageFromMsearch(cbFunc, isNeedArg, arg, priority):
-	if cbFunc is None or\
-		isNeedArg is None or\
-		priority is None or\
-		gBaseQue is None:
-		return
-
-	msg = MessageObject(cbFunc, isNeedArg, arg, None, False, priority, "msearch")
-	gBaseQue.enQue(msg)
-
-def history():
+def showHistory():
 	it = iter(gCmdList)
 	n = 0
 	for i in it:
 		n += 1
 		print " %s %s" % (n, i)
+
+def showHelp():
+	print "  -- usage --"
+	print "  upnp_da_check.py <ifname>"
+	print ""
+	print "  -- cli command --"
+	print "  ls [UDN|ip addr|friendlyName]  - show device list (friendlyName can be specified by wildcard.)"
+	print "  an <UDN>                       - analyze device (connect to device and get device info.)"
+	print "  info <UDN>                     - show device info"
+	print "  act <UDN>                      - send action to device"
+	print "  r                              - join multicast group (toggle on(def)/off)"
+	print "  t                              - cache-control (toggle enable(def)/disable)"
+	print "  sc                             - send SSDP M-SEARCH"
+	print "  ss                             - show status"
+	print "  h                              - show command hitory"
+	print "  d                              - debug log (toggle on/off(def))"
+	print "  q                              - exit from console"
 
 def cashCommand(cmd):
 	global gBeforeCmd
@@ -1994,7 +2079,7 @@ def checkCommand(cmd):
 
 	if cmd == "sc":
 #		msearch(MSEARCH_TIMEOUT)
-		if (gWorkerThread.getNowExecMsg() is not None) and (gWorkerThread.getNowExecMsg().cbFunc == msearch):
+		if (gWorkerThread.getNowExecQue() is not None) and (gWorkerThread.getNowExecQue().cbFunc == msearch):
 			print "now running..."
 		else:
 			q = gBaseQue.get(Priority.MID)
@@ -2003,11 +2088,11 @@ def checkCommand(cmd):
 			qCond.acquire()
 			if len(qList) > 0:
 				for it in iter(qList):
-					if it.opt == "msearch":
+					if it.opt == "by_msearch":
 						it.isEnable = False
 			qCond.release()
 
-			sendAsyncMessage(msearch, True, MSEARCH_TIMEOUT, Priority.HIGH)
+			Message().sendAsync(msearch, True, MSEARCH_TIMEOUT, Priority.HIGH)
 
 		cashCommand(cmd)
 
@@ -2016,12 +2101,17 @@ def checkCommand(cmd):
 			gMRThread.toggle()
 		cashCommand(cmd)
 
+	elif cmd == "t":
+		if gTimerThread is not None:
+			gTimerThread.toggle()
+		cashCommand(cmd)
+
 	elif cmd == "ss":
 		putsGlobalState()
 		cashCommand(cmd)
 
 	elif cmd == "h":
-		history()
+		showHistory()
 		cashCommand(cmd)
 
 	elif cmd == "d":
@@ -2033,12 +2123,18 @@ def checkCommand(cmd):
 			print "[debug print on]"
 		cashCommand(cmd)
 
+	elif cmd == "help":
+		showHelp()
+		cashCommand (cmd)
+
 	elif cmd == "q":
 		return False
 
 	elif cmd == "!!":
-		if not checkCommand(gBeforeCmd):
-			return
+		if checkCommand(gBeforeCmd):
+			return True
+		else:
+			return False
 
 	elif len(cmd) == 0:
 		sys.stdout.flush()
@@ -2092,7 +2188,7 @@ def checkCommand(cmd):
 			if (len(spCmd) >= 2):
 				try:
 					action(spCmd[1])
-#					sendSyncMessage(action, True, spCmd[1], False, Priority.HIGH)
+#					Message().sendSync(action, True, spCmd[1], False, Priority.HIGH)
 				except:
 					putsExceptMsg()
 			else:
@@ -2169,6 +2265,7 @@ def main(ifName):
 	global gBaseQue
 	global gWorkerThread
 	global gMRThread
+	global gTimerThread
 
 	addr = getIfAddr(ifName)
 	if addr is None:
@@ -2185,12 +2282,12 @@ def main(ifName):
 	gBaseQue = BaseQue()
 	gWorkerThread = WorkerThread()
 	gMRThread = MulticastReceiveThread()
-	timerThread = TimerThread()
+	gTimerThread = TimerThread()
 
 	#--  start sub thread
 	gWorkerThread.start()
 	gMRThread.start()
-	timerThread.start()
+	gTimerThread.start()
 
 	print ""
 	print "== UPnP Device Architecture checktool =="
