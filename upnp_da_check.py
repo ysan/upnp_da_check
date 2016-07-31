@@ -549,7 +549,7 @@ class WorkerThread (threading.Thread):
 					debugPrint("this queue is ignore")
 					continue
 
-				self.__nowExecMsg = que
+				self.__nowExecQue = que
 
 				debugPrint("worker thread exec")
 
@@ -568,7 +568,7 @@ class WorkerThread (threading.Thread):
 					# que.replyObj is UniqQue()
 					que.replyObj.reply(rtnVal)
 
-				self.__nowExecMsg = None
+				self.__nowExecQue = None
 
 	# reference only
 	def getNowExecQue(self):
@@ -1613,23 +1613,30 @@ class ControlPoint (BaseFunc):
 
 		return (resArgList, responseStatus, responseBody)
 
-def msearch(timeout):
+def msearch (ipAddr):
+	dstAddr = ""
+	if ipAddr is None:
+		dstAddr = "239.255.255.250"
+	else:
+		dstAddr = ipAddr
+
 	print "start M-SEARCH."
 
 	sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 	sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_LOOP, 0)
 	sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_IF, socket.inet_aton(gIfAddr))
 	sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, MSEARCH_TTL)
-	sock.settimeout(timeout)
+	sock.settimeout(MSEARCH_TIMEOUT)
 
 	req  = "M-SEARCH * HTTP/1.1\r\n"
 	req += "HOST: 239.255.255.250:1900\r\n"
 	req += "MAN: \"ssdp:discover\"\r\n"
-	req += "MX: %d\r\n" % timeout
+	req += "MX: %d\r\n" % MSEARCH_TIMEOUT
 	req += "ST:upnp:rootdevice\r\n"
 	req += "\r\n"
 
-	sock.sendto(req, ("239.255.255.250", 1900))
+#	sock.sendto(req, ("239.255.255.250", 1900))
+	sock.sendto(req, (dstAddr, 1900))
 
 	queuingList = []
 	while True:
@@ -1705,15 +1712,27 @@ def msearch(timeout):
 
 	del queuingList
 
-def analyze(deviceInfo):
-	if deviceInfo is None:
-		return
+def sendMsearch (arg):
+	if arg is None:
+		if (gWorkerThread.getNowExecQue() is not None) and (gWorkerThread.getNowExecQue().cbFunc == msearch):
+			print "now running..."
+		else:
+			q = gBaseQue.get(Priority.MID)
+			qList = q[0]
+			qCond = q[1]
+			qCond.acquire()
+			if len(qList) > 0:
+				for it in iter(qList):
+					if it.opt == "by_msearch":
+						it.isEnable = False
+			qCond.release()
 
-	if deviceInfo.getState() is State.ANALYZING:
-		return
-
-	cp = ControlPoint (deviceInfo)
-	cp.analyze()
+			Message().sendAsync(msearch, True, None, Priority.HIGH)
+	else:
+		if checkStringIPv4 (arg):
+			Message().sendAsync(msearch, True, arg, Priority.HIGH)
+		else:
+			print "invalid argument..."
 
 # args is tupple. for Message().sendSync()
 #
@@ -1976,6 +1995,16 @@ def info(arg):
 
 	del dcpMap
 
+def analyze(deviceInfo):
+	if deviceInfo is None:
+		return
+
+	if deviceInfo.getState() is State.ANALYZING:
+		return
+
+	cp = ControlPoint (deviceInfo)
+	cp.analyze()
+
 def manualAnalyze(arg):
 	if gDeviceInfoMap.has_key(arg):
 		info = gDeviceInfoMap[arg]
@@ -2057,7 +2086,7 @@ def showHelp():
 	print "  act <UDN>                      - send action to device"
 	print "  r                              - join multicast group (toggle on(def)/off)"
 	print "  t                              - cache-control (toggle enable(def)/disable)"
-	print "  sc                             - send SSDP M-SEARCH"
+	print "  sc [ip addr]                   - send SSDP M-SEARCH"
 	print "  ss                             - show status"
 	print "  h                              - show command hitory"
 	print "  d                              - debug log (toggle on/off(def))"
@@ -2077,26 +2106,26 @@ def checkCommand(cmd):
 	if cmd is None:
 		return True
 
-	if cmd == "sc":
-#		msearch(MSEARCH_TIMEOUT)
-		if (gWorkerThread.getNowExecQue() is not None) and (gWorkerThread.getNowExecQue().cbFunc == msearch):
-			print "now running..."
-		else:
-			q = gBaseQue.get(Priority.MID)
-			qList = q[0]
-			qCond = q[1]
-			qCond.acquire()
-			if len(qList) > 0:
-				for it in iter(qList):
-					if it.opt == "by_msearch":
-						it.isEnable = False
-			qCond.release()
+#	if cmd == "sc":
+#		if (gWorkerThread.getNowExecQue() is not None) and (gWorkerThread.getNowExecQue().cbFunc == msearch):
+#			print "now running..."
+#		else:
+#			q = gBaseQue.get(Priority.MID)
+#			qList = q[0]
+#			qCond = q[1]
+#			qCond.acquire()
+#			if len(qList) > 0:
+#				for it in iter(qList):
+#					if it.opt == "by_msearch":
+#						it.isEnable = False
+#			qCond.release()
+#
+#			Message().sendAsync(msearch, False, None, Priority.HIGH)
+#
+#		cashCommand(cmd)
 
-			Message().sendAsync(msearch, True, MSEARCH_TIMEOUT, Priority.HIGH)
-
-		cashCommand(cmd)
-
-	elif cmd == "r":
+#	elif cmd == "r":
+	if cmd == "r":
 		if gMRThread is not None:
 			gMRThread.toggle()
 		cashCommand(cmd)
@@ -2152,6 +2181,20 @@ def checkCommand(cmd):
 				print "Please set argument."
 		elif re.search("^an$", cmd):
 			print "Please set argument."
+
+
+		#------------------------------
+		if re.search("^sc ", cmd):
+			spCmd = cmd.split()
+			if len(spCmd) >= 2:
+				try:
+					sendMsearch (spCmd[1]);
+				except:
+					putsExceptMsg()
+			else:
+				sendMsearch (None);				
+		elif re.search("^sc$", cmd):
+			sendMsearch (None);
 
 
 		#------------------------------
