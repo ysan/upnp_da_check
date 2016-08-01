@@ -1615,18 +1615,23 @@ class ControlPoint (BaseFunc):
 
 def msearch (ipAddr):
 	dstAddr = ""
+	isMulticast = False
+
 	if ipAddr is None:
 		dstAddr = "239.255.255.250"
+		isMulticast = True
 	else:
 		dstAddr = ipAddr
+		isMulticast = False
 
-	print "start M-SEARCH."
+	print "M-SEARCH start."
 
 	sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-	sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_LOOP, 0)
-	sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_IF, socket.inet_aton(gIfAddr))
-	sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, MSEARCH_TTL)
 	sock.settimeout(MSEARCH_TIMEOUT)
+	if isMulticast:
+		sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_LOOP, 0)
+		sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_IF, socket.inet_aton(gIfAddr))
+		sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, MSEARCH_TTL)
 
 	req  = "M-SEARCH * HTTP/1.1\r\n"
 	req += "HOST: 239.255.255.250:1900\r\n"
@@ -1635,7 +1640,6 @@ def msearch (ipAddr):
 	req += "ST:upnp:rootdevice\r\n"
 	req += "\r\n"
 
-#	sock.sendto(req, ("239.255.255.250", 1900))
 	sock.sendto(req, (dstAddr, 1900))
 
 	queuingList = []
@@ -1693,6 +1697,10 @@ def msearch (ipAddr):
 				# queuing list
 				queuingList.append(gDeviceInfoMap[keyUsn])
 
+			if not isMulticast:
+				print "M-SEARCH end."
+				break
+
 		except socket.timeout:
 			print "M-SEARCH end."
 			break
@@ -1704,11 +1712,10 @@ def msearch (ipAddr):
 	sock.close()
 
 	if len(queuingList) > 0:
-		print "analysis in background..."
 		for it in iter(queuingList):
 			Message().sendAsyncFromMsearch(analyze, True, it, Priority.MID)
 	else:
-		print "result of M-SEARCH is not found anything..."
+		print "M-SEARCH not responding..."
 
 	del queuingList
 
@@ -2080,13 +2087,13 @@ def showHelp():
 	print "  upnp_da_check.py <ifname>"
 	print ""
 	print "  -- cli command --"
-	print "  ls [UDN|ip addr|friendlyName]  - show device list (friendlyName can be specified by wildcard.)"
+	print "  ls [UDN|ipaddr|friendlyName]   - show device list (friendlyName can be specified by wildcard.)"
 	print "  an <UDN>                       - analyze device (connect to device and get device info.)"
 	print "  info <UDN>                     - show device info"
 	print "  act <UDN>                      - send action to device"
 	print "  r                              - join multicast group (toggle on(def)/off)"
 	print "  t                              - cache-control (toggle enable(def)/disable)"
-	print "  sc [ip addr]                   - send SSDP M-SEARCH"
+	print "  sc [ipaddr]                    - send SSDP M-SEARCH"
 	print "  ss                             - show status"
 	print "  h                              - show command hitory"
 	print "  d                              - debug log (toggle on/off(def))"
@@ -2106,25 +2113,6 @@ def checkCommand(cmd):
 	if cmd is None:
 		return True
 
-#	if cmd == "sc":
-#		if (gWorkerThread.getNowExecQue() is not None) and (gWorkerThread.getNowExecQue().cbFunc == msearch):
-#			print "now running..."
-#		else:
-#			q = gBaseQue.get(Priority.MID)
-#			qList = q[0]
-#			qCond = q[1]
-#			qCond.acquire()
-#			if len(qList) > 0:
-#				for it in iter(qList):
-#					if it.opt == "by_msearch":
-#						it.isEnable = False
-#			qCond.release()
-#
-#			Message().sendAsync(msearch, False, None, Priority.HIGH)
-#
-#		cashCommand(cmd)
-
-#	elif cmd == "r":
 	if cmd == "r":
 		if gMRThread is not None:
 			gMRThread.toggle()
@@ -2184,7 +2172,7 @@ def checkCommand(cmd):
 
 
 		#------------------------------
-		if re.search("^sc ", cmd):
+		elif re.search("^sc ", cmd):
 			spCmd = cmd.split()
 			if len(spCmd) >= 2:
 				try:
