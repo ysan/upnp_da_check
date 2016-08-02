@@ -495,39 +495,80 @@ class MessageObject():
 		self.opt = opt
 		self.isEnable = True
 
+#class Message():
+#	def sendSync (self, cbFunc, isNeedArg, arg, isNeedRtnVal, priority):
+#		if cbFunc is None or\
+#			isNeedArg is None or\
+#			isNeedRtnVal is None or\
+#			priority is None or\
+#			gBaseQue is None:
+#			return
+#
+#		uniqQue = UniqQue()
+#		msg = MessageObject (cbFunc, isNeedArg, arg, uniqQue, isNeedRtnVal, priority, None)
+#		gBaseQue.enQue (msg)
+#		return uniqQue.receive()
+#
+#	def sendAsync (self, cbFunc, isNeedArg, arg, priority):
+#		if cbFunc is None or\
+#			isNeedArg is None or\
+#			priority is None or\
+#			gBaseQue is None:
+#			return
+#
+#		msg = MessageObject (cbFunc, isNeedArg, arg, None, False, priority, None)
+#		gBaseQue.enQue (msg)
+#
+#	# for msearch
+#	def sendAsyncFromMsearch (self, cbFunc, isNeedArg, arg, priority):
+#		if cbFunc is None or\
+#			isNeedArg is None or\
+#			priority is None or\
+#			gBaseQue is None:
+#			return
+#
+#		msg = MessageObject (cbFunc, isNeedArg, arg, None, False, priority, "by_msearch")
+#		gBaseQue.enQue(msg)
+
 class Message():
-	def sendSync (self, cbFunc, isNeedArg, arg, isNeedRtnVal, priority):
-		if cbFunc is None or\
-			isNeedArg is None or\
-			isNeedRtnVal is None or\
-			priority is None or\
+	def __init__(self, cbFunc, isNeedArg, arg, priority):
+		self.__cbFunc = cbFunc
+		self.__isNeedArg = isNeedArg
+		self.__arg = arg
+		self.__priority = priority
+
+	# cbFunc need return
+	def sendSync (self):
+		if self.__cbFunc is None or\
+			self.__isNeedArg is None or\
+			self.__priority is None or\
 			gBaseQue is None:
 			return
 
 		uniqQue = UniqQue()
-		msg = MessageObject (cbFunc, isNeedArg, arg, uniqQue, isNeedRtnVal, priority, None)
+		msg = MessageObject (self.__cbFunc, self.__isNeedArg, self.__arg, uniqQue, True, self.__priority, None)
 		gBaseQue.enQue (msg)
 		return uniqQue.receive()
 
-	def sendAsync (self, cbFunc, isNeedArg, arg, priority):
-		if cbFunc is None or\
-			isNeedArg is None or\
-			priority is None or\
+	def sendAsync (self):
+		if self.__cbFunc is None or\
+			self.__isNeedArg is None or\
+			self.__priority is None or\
 			gBaseQue is None:
 			return
 
-		msg = MessageObject (cbFunc, isNeedArg, arg, None, False, priority, None)
+		msg = MessageObject (self.__cbFunc, self.__isNeedArg, self.__arg, None, False, self.__priority, None)
 		gBaseQue.enQue (msg)
 
 	# for msearch
-	def sendAsyncFromMsearch (self, cbFunc, isNeedArg, arg, priority):
-		if cbFunc is None or\
-			isNeedArg is None or\
-			priority is None or\
+	def sendAsyncFromMsearch (self):
+		if self.__cbFunc is None or\
+			self.__isNeedArg is None or\
+			self.__priority is None or\
 			gBaseQue is None:
 			return
 
-		msg = MessageObject (cbFunc, isNeedArg, arg, None, False, priority, "by_msearch")
+		msg = MessageObject (self.__cbFunc, self.__isNeedArg, self.__arg, None, False, self.__priority, "by_msearch")
 		gBaseQue.enQue(msg)
 
 class WorkerThread (threading.Thread):
@@ -640,7 +681,9 @@ class MulticastReceiveThread(threading.Thread):
 						##################################
 						# not queuing if there is piled in that queue at the same [usn]
 						if not self.__checkAlreadyQueuing(keyUsn):
-							Message().sendAsync(analyze, True, gDeviceInfoMap[keyUsn], Priority.LOW)
+#							Message().sendAsync(analyze, True, gDeviceInfoMap[keyUsn], Priority.LOW)
+							msg = Message (analyze, True, gDeviceInfoMap[keyUsn], Priority.LOW)
+							msg.sendAsync()
 						else:
 							debugPrint("not queuing")
 						##################################
@@ -1461,17 +1504,127 @@ class BaseFunc():
 			return serviceStateTableMap
 
 class ControlPoint (BaseFunc):
-	def __init__(self, deviceInfo=None, serviceInfo=None, actionInfo=None, reqArgList=None):
-		self.__deviceInfo = deviceInfo
-		self.__serviceInfo = serviceInfo
-		self.__actionInfo = actionInfo
-		self.__reqArgList = reqArgList
+	def __init__(self, arg0=None, arg1=None, arg2=None, arg3=None):
+		self.__arg0 = arg0
+		self.__arg1 = arg1
+		self.__arg2 = arg2
+		self.__arg3 = arg3
+
+	def msearch (self):
+		ipAddr = self.__arg0
+
+		dstAddr = ""
+		isMulticast = False
+
+		if ipAddr is None:
+			dstAddr = "239.255.255.250"
+			isMulticast = True
+		else:
+			dstAddr = ipAddr
+			isMulticast = False
+
+		print "M-SEARCH start."
+
+		sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+		sock.settimeout(MSEARCH_TIMEOUT)
+		if isMulticast:
+			sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_LOOP, 0)
+			sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_IF, socket.inet_aton(gIfAddr))
+			sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, MSEARCH_TTL)
+
+		req  = "M-SEARCH * HTTP/1.1\r\n"
+		req += "HOST: 239.255.255.250:1900\r\n"
+		req += "MAN: \"ssdp:discover\"\r\n"
+		req += "MX: %d\r\n" % MSEARCH_TIMEOUT
+		req += "ST:upnp:rootdevice\r\n"
+		req += "\r\n"
+
+		sock.sendto(req, (dstAddr, 1900))
+
+		queuingList = []
+		while True:
+			try:
+				buff, addr = sock.recvfrom(4096)
+#				debugPrint(addr)
+#				debugPrint(buff)
+				strAddr = addr[0]
+
+				res = HttpResponse(buff)
+				if res is not None:
+					loc = res.getheader("Location")
+					usn = res.getheader("USN")
+					cc = res.getheader("Cache-Control")
+					if loc is None:
+						loc = ""
+					if usn is None:
+						usn = ""
+					if cc is None:
+						cc = ""
+
+					spUsn = usn.split("::")
+					keyUsn = spUsn[0]
+					debugPrint("key:[%s]" % keyUsn)
+
+					ageNum = -1
+					if re.search("max-age *=", cc, re.IGNORECASE):
+						spCc = cc.split("=")
+						age = spCc[1].strip()
+						if age.isdigit():
+							ageNum = long(age)
+
+					debugPrint(loc)
+
+					# lock
+					gLockDeviceInfoMap.acquire()
+
+					if gDeviceInfoMap.has_key(keyUsn):
+						# mod hash map
+						gDeviceInfoMap[keyUsn].clearForModMap()
+						gDeviceInfoMap[keyUsn].setContent(buff)
+						gDeviceInfoMap[keyUsn].setIpAddr(strAddr)
+						gDeviceInfoMap[keyUsn].setLocUrl(loc)
+						gDeviceInfoMap[keyUsn].setUsn(keyUsn)
+						gDeviceInfoMap[keyUsn].setAge(ageNum)
+
+					else:
+						# add hash map
+						gDeviceInfoMap[keyUsn] = DeviceInfo(0, buff, strAddr, loc, keyUsn, ageNum)
+
+					# unlock
+					gLockDeviceInfoMap.release()
+
+					# queuing list
+					queuingList.append(gDeviceInfoMap[keyUsn])
+
+				if not isMulticast:
+					print "M-SEARCH end."
+					break
+
+			except socket.timeout:
+				print "M-SEARCH end."
+				break
+
+			except:
+				putsExceptMsg()
+				break
+
+		sock.close()
+
+		if len(queuingList) > 0:
+			for it in iter(queuingList):
+#				Message().sendAsyncFromMsearch(analyze, True, it, Priority.MID)
+				msg = Message (analyze, True, it, Priority.MID);
+				msg.sendAsyncFromMsearch();
+		else:
+			print "M-SEARCH not responding..."
+
+		del queuingList
 
 	def analyze (self):
-		if self.__deviceInfo is None:
+		if self.__arg0 is None:
 			return
 
-		deviceInfo = self.__deviceInfo
+		deviceInfo = self.__arg0
 
 		if deviceInfo.getState() is State.ANALYZING:
 			return
@@ -1571,16 +1724,16 @@ class ControlPoint (BaseFunc):
 	#     tuple[1]: HTTP status code
 	#     tuple[2]: HTTP response body
 	def action (self):
-		if self.__deviceInfo is None or\
-			self.__serviceInfo is None or\
-			self.__actionInfo is None or\
-			self.__reqArgList is None:
+		if self.__arg0 is None or\
+			self.__arg1 is None or\
+			self.__arg2 is None or\
+			self.__arg3 is None:
 			return (None, None, None)
 
-		deviceInfo = self.__deviceInfo
-		serviceInfo = self.__serviceInfo
-		actionInfo = self.__actionInfo
-		reqArgList = self.__reqArgList
+		deviceInfo = self.__arg0
+		serviceInfo = self.__arg1
+		actionInfo = self.__arg2
+		reqArgList = self.__arg3
 
 		base = ""
 		if len(deviceInfo.getUrlBase()) > 0:
@@ -1613,111 +1766,9 @@ class ControlPoint (BaseFunc):
 
 		return (resArgList, responseStatus, responseBody)
 
-def msearch (ipAddr):
-	dstAddr = ""
-	isMulticast = False
-
-	if ipAddr is None:
-		dstAddr = "239.255.255.250"
-		isMulticast = True
-	else:
-		dstAddr = ipAddr
-		isMulticast = False
-
-	print "M-SEARCH start."
-
-	sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-	sock.settimeout(MSEARCH_TIMEOUT)
-	if isMulticast:
-		sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_LOOP, 0)
-		sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_IF, socket.inet_aton(gIfAddr))
-		sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, MSEARCH_TTL)
-
-	req  = "M-SEARCH * HTTP/1.1\r\n"
-	req += "HOST: 239.255.255.250:1900\r\n"
-	req += "MAN: \"ssdp:discover\"\r\n"
-	req += "MX: %d\r\n" % MSEARCH_TIMEOUT
-	req += "ST:upnp:rootdevice\r\n"
-	req += "\r\n"
-
-	sock.sendto(req, (dstAddr, 1900))
-
-	queuingList = []
-	while True:
-		try:
-			buff, addr = sock.recvfrom(4096)
-#			debugPrint(addr)
-#			debugPrint(buff)
-			strAddr = addr[0]
-
-			res = HttpResponse(buff)
-			if res is not None:
-				loc = res.getheader("Location")
-				usn = res.getheader("USN")
-				cc = res.getheader("Cache-Control")
-				if loc is None:
-					loc = ""
-				if usn is None:
-					usn = ""
-				if cc is None:
-					cc = ""
-
-				spUsn = usn.split("::")
-				keyUsn = spUsn[0]
-				debugPrint("key:[%s]" % keyUsn)
-
-				ageNum = -1
-				if re.search("max-age *=", cc, re.IGNORECASE):
-					spCc = cc.split("=")
-					age = spCc[1].strip()
-					if age.isdigit():
-						ageNum = long(age)
-
-				debugPrint(loc)
-
-				# lock
-				gLockDeviceInfoMap.acquire()
-
-				if gDeviceInfoMap.has_key(keyUsn):
-					# mod hash map
-					gDeviceInfoMap[keyUsn].clearForModMap()
-					gDeviceInfoMap[keyUsn].setContent(buff)
-					gDeviceInfoMap[keyUsn].setIpAddr(strAddr)
-					gDeviceInfoMap[keyUsn].setLocUrl(loc)
-					gDeviceInfoMap[keyUsn].setUsn(keyUsn)
-					gDeviceInfoMap[keyUsn].setAge(ageNum)
-
-				else:
-					# add hash map
-					gDeviceInfoMap[keyUsn] = DeviceInfo(0, buff, strAddr, loc, keyUsn, ageNum)
-
-				# unlock
-				gLockDeviceInfoMap.release()
-
-				# queuing list
-				queuingList.append(gDeviceInfoMap[keyUsn])
-
-			if not isMulticast:
-				print "M-SEARCH end."
-				break
-
-		except socket.timeout:
-			print "M-SEARCH end."
-			break
-
-		except:
-			putsExceptMsg()
-			break
-
-	sock.close()
-
-	if len(queuingList) > 0:
-		for it in iter(queuingList):
-			Message().sendAsyncFromMsearch(analyze, True, it, Priority.MID)
-	else:
-		print "M-SEARCH not responding..."
-
-	del queuingList
+def msearch (arg):
+	cp = ControlPoint (arg)
+	cp.msearch()
 
 def sendMsearch (arg):
 	if arg is None:
@@ -1734,10 +1785,14 @@ def sendMsearch (arg):
 						it.isEnable = False
 			qCond.release()
 
-			Message().sendAsync(msearch, True, None, Priority.HIGH)
+#			Message().sendAsync(msearch, True, None, Priority.HIGH)
+			msg = Message (msearch, True, None, Priority.HIGH);
+			msg.sendAsync();
 	else:
 		if checkStringIPv4 (arg):
-			Message().sendAsync(msearch, True, arg, Priority.HIGH)
+#			Message().sendAsync(msearch, True, arg, Priority.HIGH)
+			msg = Message (msearch, True, arg, Priority.HIGH);
+			msg.sendAsync();
 		else:
 			print "invalid argument..."
 
@@ -1808,7 +1863,9 @@ def actionInner(deviceInfo, serviceType):
 		print ""
 
 		argTuple = (deviceInfo, serviceInfo, serviceInfo.getActionListMap()[act], reqArgList)
-		rtn = Message().sendSync(actionInnerWrapper, True, argTuple, True, Priority.HIGH)
+#		rtn = Message().sendSync(actionInnerWrapper, True, argTuple, True, Priority.HIGH)
+		msg = Message (actionInnerWrapper, True, argTuple, Priority.HIGH)
+		rtn = msg.sendSync()
 		resArgList = rtn[0]
 		responseStatus = rtn[1]
 		responseBody = rtn[2]
@@ -2015,7 +2072,9 @@ def analyze(deviceInfo):
 def manualAnalyze(arg):
 	if gDeviceInfoMap.has_key(arg):
 		info = gDeviceInfoMap[arg]
-		Message().sendAsync(analyze, True, info, Priority.HIGH)
+#		Message().sendAsync(analyze, True, info, Priority.HIGH)
+		msg = Message (analyze, True, info, Priority.HIGH)
+		msg.sendAsync()
 	else:
 		print "not found..."
 
@@ -2219,7 +2278,6 @@ def checkCommand(cmd):
 			if (len(spCmd) >= 2):
 				try:
 					action(spCmd[1])
-#					Message().sendSync(action, True, spCmd[1], False, Priority.HIGH)
 				except:
 					putsExceptMsg()
 			else:
