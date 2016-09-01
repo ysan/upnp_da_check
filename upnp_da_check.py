@@ -495,81 +495,84 @@ class MessageObject():
 		self.opt = opt
 		self.isEnable = True
 
-#class Message():
-#	def sendSync (self, cbFunc, isNeedArg, arg, isNeedRtnVal, priority):
-#		if cbFunc is None or\
-#			isNeedArg is None or\
-#			isNeedRtnVal is None or\
-#			priority is None or\
-#			gBaseQue is None:
-#			return
-#
-#		uniqQue = UniqQue()
-#		msg = MessageObject (cbFunc, isNeedArg, arg, uniqQue, isNeedRtnVal, priority, None)
-#		gBaseQue.enQue (msg)
-#		return uniqQue.receive()
-#
-#	def sendAsync (self, cbFunc, isNeedArg, arg, priority):
-#		if cbFunc is None or\
-#			isNeedArg is None or\
-#			priority is None or\
-#			gBaseQue is None:
-#			return
-#
-#		msg = MessageObject (cbFunc, isNeedArg, arg, None, False, priority, None)
-#		gBaseQue.enQue (msg)
-#
-#	# for msearch
-#	def sendAsyncFromMsearch (self, cbFunc, isNeedArg, arg, priority):
-#		if cbFunc is None or\
-#			isNeedArg is None or\
-#			priority is None or\
-#			gBaseQue is None:
-#			return
-#
-#		msg = MessageObject (cbFunc, isNeedArg, arg, None, False, priority, "by_msearch")
-#		gBaseQue.enQue(msg)
-
 class Message():
-	def __init__(self, cbFunc, isNeedArg, arg, priority):
-		self.__cbFunc = cbFunc
-		self.__isNeedArg = isNeedArg
-		self.__arg = arg
-		self.__priority = priority
-
-	# cbFunc need return
-	def sendSync (self):
-		if self.__cbFunc is None or\
-			self.__isNeedArg is None or\
-			self.__priority is None or\
+	@staticmethod
+	def sendSync (cbFunc, isNeedArg, arg, isNeedRtnVal, priority):
+		if cbFunc is None or\
+			isNeedArg is None or\
+			isNeedRtnVal is None or\
+			priority is None or\
 			gBaseQue is None:
 			return
 
 		uniqQue = UniqQue()
-		msg = MessageObject (self.__cbFunc, self.__isNeedArg, self.__arg, uniqQue, True, self.__priority, None)
+		msg = MessageObject (cbFunc, isNeedArg, arg, uniqQue, isNeedRtnVal, priority, None)
 		gBaseQue.enQue (msg)
 		return uniqQue.receive()
 
-	def sendAsync (self):
-		if self.__cbFunc is None or\
-			self.__isNeedArg is None or\
-			self.__priority is None or\
+	@staticmethod
+	def sendAsync (cbFunc, isNeedArg, arg, priority):
+		if cbFunc is None or\
+			isNeedArg is None or\
+			priority is None or\
 			gBaseQue is None:
 			return
 
-		msg = MessageObject (self.__cbFunc, self.__isNeedArg, self.__arg, None, False, self.__priority, None)
+		msg = MessageObject (cbFunc, isNeedArg, arg, None, False, priority, None)
 		gBaseQue.enQue (msg)
 
 	# for msearch
-	def sendAsyncFromMsearch (self):
-		if self.__cbFunc is None or\
-			self.__isNeedArg is None or\
-			self.__priority is None or\
+	@staticmethod
+	def sendAsyncFromMsearch (cbFunc, isNeedArg, arg, priority):
+		if cbFunc is None or\
+			isNeedArg is None or\
+			priority is None or\
 			gBaseQue is None:
 			return
 
-		msg = MessageObject (self.__cbFunc, self.__isNeedArg, self.__arg, None, False, self.__priority, "by_msearch")
+		msg = MessageObject (cbFunc, isNeedArg, arg, None, False, priority, "by_msearch")
 		gBaseQue.enQue(msg)
+
+#class Message():
+#	def __init__(self, cbFunc, isNeedArg, arg, priority):
+#		self.__cbFunc = cbFunc
+#		self.__isNeedArg = isNeedArg
+#		self.__arg = arg
+#		self.__priority = priority
+#
+#	# cbFunc need return
+#	def sendSync (self):
+#		if self.__cbFunc is None or\
+#			self.__isNeedArg is None or\
+#			self.__priority is None or\
+#			gBaseQue is None:
+#			return
+#
+#		uniqQue = UniqQue()
+#		msg = MessageObject (self.__cbFunc, self.__isNeedArg, self.__arg, uniqQue, True, self.__priority, None)
+#		gBaseQue.enQue (msg)
+#		return uniqQue.receive()
+#
+#	def sendAsync (self):
+#		if self.__cbFunc is None or\
+#			self.__isNeedArg is None or\
+#			self.__priority is None or\
+#			gBaseQue is None:
+#			return
+#
+#		msg = MessageObject (self.__cbFunc, self.__isNeedArg, self.__arg, None, False, self.__priority, None)
+#		gBaseQue.enQue (msg)
+#
+#	# for msearch
+#	def sendAsyncFromMsearch (self):
+#		if self.__cbFunc is None or\
+#			self.__isNeedArg is None or\
+#			self.__priority is None or\
+#			gBaseQue is None:
+#			return
+#
+#		msg = MessageObject (self.__cbFunc, self.__isNeedArg, self.__arg, None, False, self.__priority, "by_msearch")
+#		gBaseQue.enQue(msg)
 
 class WorkerThread (threading.Thread):
 	def __init__(self):
@@ -681,9 +684,9 @@ class MulticastReceiveThread(threading.Thread):
 						##################################
 						# not queuing if there is piled in that queue at the same [usn]
 						if not self.__checkAlreadyQueuing(keyUsn):
-#							Message().sendAsync(analyze, True, gDeviceInfoMap[keyUsn], Priority.LOW)
-							msg = Message (analyze, True, gDeviceInfoMap[keyUsn], Priority.LOW)
-							msg.sendAsync()
+							Message.sendAsync(analyze, True, gDeviceInfoMap[keyUsn], Priority.LOW)
+#							msg = Message (analyze, True, gDeviceInfoMap[keyUsn], Priority.LOW)
+#							msg.sendAsync()
 						else:
 							debugPrint("not queuing")
 						##################################
@@ -1612,9 +1615,9 @@ class ControlPoint (BaseFunc):
 
 		if len(queuingList) > 0:
 			for it in iter(queuingList):
-#				Message().sendAsyncFromMsearch(analyze, True, it, Priority.MID)
-				msg = Message (analyze, True, it, Priority.MID);
-				msg.sendAsyncFromMsearch();
+				Message.sendAsyncFromMsearch(analyze, True, it, Priority.MID)
+#				msg = Message (analyze, True, it, Priority.MID);
+#				msg.sendAsyncFromMsearch();
 		else:
 			print "M-SEARCH not responding..."
 
@@ -1785,14 +1788,14 @@ def sendMsearch (arg):
 						it.isEnable = False
 			qCond.release()
 
-#			Message().sendAsync(msearch, True, None, Priority.HIGH)
-			msg = Message (msearch, True, None, Priority.HIGH);
-			msg.sendAsync();
+			Message.sendAsync(msearch, True, None, Priority.HIGH)
+#			msg = Message (msearch, True, None, Priority.HIGH);
+#			msg.sendAsync();
 	else:
 		if checkStringIPv4 (arg):
-#			Message().sendAsync(msearch, True, arg, Priority.HIGH)
-			msg = Message (msearch, True, arg, Priority.HIGH);
-			msg.sendAsync();
+			Message.sendAsync(msearch, True, arg, Priority.HIGH)
+#			msg = Message (msearch, True, arg, Priority.HIGH);
+#			msg.sendAsync();
 		else:
 			print "invalid argument..."
 
@@ -1863,9 +1866,9 @@ def actionInner(deviceInfo, serviceType):
 		print ""
 
 		argTuple = (deviceInfo, serviceInfo, serviceInfo.getActionListMap()[act], reqArgList)
-#		rtn = Message().sendSync(actionInnerWrapper, True, argTuple, True, Priority.HIGH)
-		msg = Message (actionInnerWrapper, True, argTuple, Priority.HIGH)
-		rtn = msg.sendSync()
+		rtn = Message.sendSync(actionInnerWrapper, True, argTuple, True, Priority.HIGH)
+#		msg = Message (actionInnerWrapper, True, argTuple, Priority.HIGH)
+#		rtn = msg.sendSync()
 		resArgList = rtn[0]
 		responseStatus = rtn[1]
 		responseBody = rtn[2]
@@ -2072,9 +2075,9 @@ def analyze(deviceInfo):
 def manualAnalyze(arg):
 	if gDeviceInfoMap.has_key(arg):
 		info = gDeviceInfoMap[arg]
-#		Message().sendAsync(analyze, True, info, Priority.HIGH)
-		msg = Message (analyze, True, info, Priority.HIGH)
-		msg.sendAsync()
+		Message.sendAsync(analyze, True, info, Priority.HIGH)
+#		msg = Message (analyze, True, info, Priority.HIGH)
+#		msg.sendAsync()
 	else:
 		print "not found..."
 
