@@ -154,16 +154,19 @@ When the exit from the console, enter the "q".
 
 Tool in the command
 ------------
-- ls [UDN|ip addr]    - display device list
-- r                   - join multicast group (on/off)
-- sc                  - send SSDP M-SEARCH
-- info \<UDN\>          - display device info
-- an \<UDN\>            - connect and get device info
-- act \<UDN\>           - send action to device
-- ss                  - display status
-- d                   - debug log on/off
-- q                   - exit from console
-
+- ls  [UDN|ipaddr|friendlyName]  - show device list (friendlyName can be specified by wildcard.)"
+- an  UDN                        - analyze device (connect to device and get device info.)"
+- info  UDN                      - show device info"
+- act  UDN                       - send action to device"
+- r                              - join multicast group (toggle on(def)/off)"
+- t                              - cache-control (toggle enable(def)/disable)"
+- sc  [ipaddr]                   - send SSDP M-SEARCH"
+- sd  http-url                   - simple HTTP downloader"
+- ss                             - show status"
+- c                              - show command hitory"
+- h                              - show command referense"
+- d                              - debug log (toggle on/off(def))"
+- q                              - exit from console"
 
 Platforms
 ------------

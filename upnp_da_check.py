@@ -24,6 +24,7 @@ from threading import Condition, Thread
 import time
 import itertools
 import copy
+import os
 
 
 NAMESPACE_UPNP_DEVICE   = "urn:schemas-upnp-org:device-1-0"
@@ -978,6 +979,7 @@ class BaseFunc():
 					debugPrint("[" + buff + "]")
 					#TODO
 					# Content-Length, Transfer-Encoding can not both exist
+					# And it can be received for the time being all
 					return (0, 0, httpStatus)
 
 		else:
@@ -1173,6 +1175,9 @@ class BaseFunc():
 
 		compPath = re.sub("^/+", "/", compPath)
 
+		if len(compPath) == 0:
+			compPath = "/"
+
 		msg  = "GET " + compPath + " HTTP/1.1\r\n"
 		msg += "Host: %s:%s\r\n" % (addr, port)
 #		msg += "Connection: close\r\n"
@@ -1191,6 +1196,7 @@ class BaseFunc():
 
 		debugPrint(url)
 
+		port = 0
 		rtn = urlparse(url)
 		if rtn.port is None:
 			port = 80
@@ -1773,7 +1779,7 @@ def msearch (arg):
 	cp = ControlPoint (arg)
 	cp.msearch()
 
-def sendMsearch (arg):
+def sendMsearch (arg=None):
 	if arg is None:
 		if (gWorkerThread.getNowExecQue() is not None) and (gWorkerThread.getNowExecQue().cbFunc == msearch):
 			print "now running..."
@@ -1986,7 +1992,7 @@ def checkStringIPv4(val):
 
 	return True
 
-def listDevice(arg):
+def listDevice (arg=None):
 	gLockDeviceInfoMap.acquire() # lock
 	dcpMap = copy.deepcopy(gDeviceInfoMap)
 	gLockDeviceInfoMap.release() # unlock
@@ -2072,7 +2078,7 @@ def analyze(deviceInfo):
 	cp = ControlPoint (deviceInfo)
 	cp.analyze()
 
-def manualAnalyze(arg):
+def manualAnalyze (arg):
 	if gDeviceInfoMap.has_key(arg):
 		info = gDeviceInfoMap[arg]
 		Message.sendAsync(analyze, True, info, Priority.HIGH)
@@ -2080,6 +2086,38 @@ def manualAnalyze(arg):
 #		msg.sendAsync()
 	else:
 		print "not found..."
+
+def downloadAtHttp (url):
+	rtn = urlparse(url)
+	if len(rtn.scheme) == 0:
+		print "invalid url."
+		return
+
+	if not re.match("http$", rtn.scheme, re.IGNORECASE):
+		print "%s is not support.  HTTP only..." % rtn.scheme
+		return
+
+	if rtn.hostname is None:
+		print "invalid url."
+		return
+
+	bf = BaseFunc ()
+	response = bf.getHttpContent (rtn.hostname, url)
+	if len (response[1]) == 0:
+		print "can not download..."
+	else:
+		if re.match("200 OK", response[1], re.IGNORECASE):
+			print "downloaded  (status=%s) (%d bytes)" % (response[1], len(response[0]))
+
+			f = open ("download.data", "w")
+			try:
+				f.write (response[0])
+			finally:
+				f.close ()
+				print "save %s/download.data" % os.path.abspath(os.path.dirname(__file__))
+
+		else:
+			print "can not download...  (status=%s)" % response[1]
 
 def getIfAddr(ifName):
 	s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -2146,18 +2184,20 @@ def showHistory():
 
 def showHelp():
 	print "  -- usage --"
-	print "  upnp_da_check.py <ifname>"
+	print "  upnp_da_check.py ifname"
 	print ""
 	print "  -- cli command --"
-	print "  ls [UDN|ipaddr|friendlyName]   - show device list (friendlyName can be specified by wildcard.)"
-	print "  an <UDN>                       - analyze device (connect to device and get device info.)"
-	print "  info <UDN>                     - show device info"
-	print "  act <UDN>                      - send action to device"
+	print "  ls  [UDN|ipaddr|friendlyName]  - show device list (friendlyName can be specified by wildcard.)"
+	print "  an  UDN                        - analyze device (connect to device and get device info.)"
+	print "  info  UDN                      - show device info"
+	print "  act  UDN                       - send action to device"
 	print "  r                              - join multicast group (toggle on(def)/off)"
 	print "  t                              - cache-control (toggle enable(def)/disable)"
-	print "  sc [ipaddr]                    - send SSDP M-SEARCH"
+	print "  sc  [ipaddr]                   - send SSDP M-SEARCH"
+	print "  sd  http-url                   - simple HTTP downloader"
 	print "  ss                             - show status"
-	print "  h                              - show command hitory"
+	print "  c                              - show command hitory"
+	print "  h                              - show command referense"
 	print "  d                              - debug log (toggle on/off(def))"
 	print "  q                              - exit from console"
 
@@ -2189,7 +2229,7 @@ def checkCommand(cmd):
 		putsGlobalState()
 		cashCommand(cmd)
 
-	elif cmd == "h":
+	elif cmd == "c":
 		showHistory()
 		cashCommand(cmd)
 
@@ -2202,7 +2242,7 @@ def checkCommand(cmd):
 			print "[debug print on]"
 		cashCommand(cmd)
 
-	elif cmd == "help":
+	elif cmd == "h":
 		showHelp()
 		cashCommand (cmd)
 
@@ -2222,11 +2262,13 @@ def checkCommand(cmd):
 		#------------------------------
 		if re.search("^an ", cmd):
 			spCmd = cmd.split()
-			if len(spCmd) >= 2:
+			if len(spCmd) == 2:
 				try:
 					manualAnalyze(spCmd[1])
 				except:
 					putsExceptMsg()
+			elif len(spCmd) > 2:
+				print "invalid argument.\nargument is valid only one."
 			else:
 				print "Please set argument."
 		elif re.search("^an$", cmd):
@@ -2236,25 +2278,29 @@ def checkCommand(cmd):
 		#------------------------------
 		elif re.search("^sc ", cmd):
 			spCmd = cmd.split()
-			if len(spCmd) >= 2:
+			if len(spCmd) == 2:
 				try:
 					sendMsearch (spCmd[1]);
 				except:
 					putsExceptMsg()
+			elif len(spCmd) > 2:
+				print "invalid argument.\nargument is valid only one."
 			else:
 				sendMsearch (None);				
 		elif re.search("^sc$", cmd):
-			sendMsearch (None);
+			sendMsearch ();
 
 
 		#------------------------------
 		elif re.search("^info ", cmd):
 			spCmd = cmd.split()
-			if (len(spCmd) >= 2):
+			if (len(spCmd) == 2):
 				try:
 					info(spCmd[1])
 				except:
 					putsExceptMsg()
+			elif len(spCmd) > 2:
+				print "invalid argument.\nargument is valid only one."
 			else:
 				print "Please set argument."
 		elif re.search("^info$", cmd):
@@ -2264,28 +2310,48 @@ def checkCommand(cmd):
 		#------------------------------
 		elif re.search("^ls ", cmd):
 			spCmd = cmd.split()
-			if (len(spCmd) >= 2):
+			if (len(spCmd) == 2):
 				try:
 					listDevice(spCmd[1])
 				except:
 					putsExceptMsg()
+			elif len(spCmd) > 2:
+				print "invalid argument.\nargument is valid only one."
 			else:
 				print "Please set argument."
 		elif re.search("^ls$", cmd):
-			listDevice(None)
+			listDevice ()
 
 
 		#------------------------------
 		elif re.search("^act ", cmd):
 			spCmd = cmd.split()
-			if (len(spCmd) >= 2):
+			if (len(spCmd) == 2):
 				try:
 					action(spCmd[1])
 				except:
 					putsExceptMsg()
+			elif len(spCmd) > 2:
+				print "invalid argument.\nargument is valid only one."
 			else:
 				print "Please set argument."
 		elif re.search("^act$", cmd):
+			print "Please set argument."
+
+
+		#------------------------------
+		elif re.search("^sd ", cmd):
+			spCmd = cmd.split()
+			if (len(spCmd) == 2):
+				try:
+					downloadAtHttp (spCmd[1])
+				except:
+					putsExceptMsg()
+			elif len(spCmd) > 2:
+				print "invalid argument.\nargument is valid only one."
+			else:
+				print "Please set argument."
+		elif re.search("^sd$", cmd):
 			print "Please set argument."
 
 
@@ -2382,7 +2448,7 @@ def main(ifName):
 	gTimerThread.start()
 
 	print ""
-	print "== UPnP Device Architecture checktool =="
+	print "== UPnP DA checktool =="
 	putsGlobalState()
 	print ""
 
