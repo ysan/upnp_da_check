@@ -2448,7 +2448,7 @@ def main(ifName):
 	gTimerThread.start()
 
 	print ""
-	print "== UPnP DA checktool =="
+	print "== UPnP DA checktool (sniffer) =="
 	putsGlobalState()
 	print ""
 

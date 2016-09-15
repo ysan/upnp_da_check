@@ -1,4 +1,4 @@
-UPnP Device Architecture check tool
+UPnP DA checktool (sniffer)
 ===============
 
 The tool is intended to perform control for devices that perform user with various functions as a UPnP Device Architecture is a control point.
