@@ -7,7 +7,7 @@ The tool is intended to perform control for devices that perform user with vario
 Usage
 --------
 
-	$ ./upnp_da_check.py <network interface name>
+	$ ./upnp_da_check.py ifname
 
 on the command line. Execution path you are free.
 
@@ -16,36 +16,22 @@ Examples
 --------
 
 	$ ./upnp_da_check.py eth0
-	eth0 : 43.31.105.122
-	console start.
+	
+	== UPnP DA checktool (sniffer) ==
+	--------------------------------
+	interface: [eth0 (43.3.177.96)]
+	workerThread queue: [Hi:0, Mid:0, Lo:0]
+	Multicast receive: [running]
+	Cache-Control: [enable]
+	debug print: [off]
+	--------------------------------
+
+	console start...
+	./upnp_da_check.py >
+	./upnp_da_check.py >
 	./upnp_da_check.py >
 
 Console will rise when you start the program.
-
-
-	./upnp_da_check.py > ls
-	none.
-	./upnp_da_check.py >
-
-When you run the ls to display the device list.  
-Device list because this case has not received the discover packet is empty.
-
-
-	./upnp_da_check.py > r
-	[Multicast receive start]
-	./upnp_da_check.py >
-
-When you run the r command to join the multicast group.  
-This you will start receiving the discover packet.
-
-
-	./upnp_da_check.py > r
-	[Multicast receive stop]
-	./upnp_da_check.py > r
-	[Multicast receive start]
-	./upnp_da_check.py >
-
-Repeating the r command to toggle the start / stop.
 
 
 	./upnp_da_check.py > ls
@@ -78,11 +64,11 @@ This is when there is some upnp enabled devices on the LAN if.
 
 If you pass the argument UDN to info command, detailed information for that device appears.  
 (Display content here it will omitted.)  
-\ * Discover the contents of the packet  
-\ * Location overview of the content of  
-\ * The Published service list  
-\ * In-service there is what kind of action, and information of the argument to pass to the action  
-\ * etc
+- Discover the contents of the packet
+- Location overview of the content of
+- The Published service list
+- In-service there is what kind of action, and information of the argument to pass to the action
+etc...
 
 
 	./upnp_da_check.py > act uuid:cfe92100-67c4-11d4-a45f-xxxxxxxxxxxx
@@ -168,6 +154,8 @@ Tool in the command
 - d                              - debug log (toggle on/off(def))"
 - q                              - exit from console"
 
+
+
 Platforms
 ------------
 Ubuntu, Fedora
@@ -175,9 +163,4 @@ Ubuntu, Fedora
 These in operation verification settled.
 I think when you work with other distributions.
 You need to install some of the python module depending on the operating environment.
-
-
-Author
-------------
-Yoshitake Kurihara (kurihara0-lj@infoseek.jp)
 
