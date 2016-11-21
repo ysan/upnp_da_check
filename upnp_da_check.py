@@ -2108,20 +2108,44 @@ def downloadAtHttp (url):
 		print "invalid url."
 		return
 
+	dlName = ""
+	if len(rtn.path) > 0:
+		spPath = rtn.path.split("/");
+		if len(spPath) > 0:
+			if len (spPath[len(spPath) -1]) > 0:
+				dlName = spPath[len(spPath) -1]
+			else:
+				dlName = "download.data"
+		else:
+			dlName = "download.data"
+	else:
+		dlName = "download.data"
+#	print "dlName[%s]" % dlName
+	dlFullPath = "%s/%s" % (os.path.abspath(os.path.dirname(__file__)), dlName)
+
 	bf = BaseFunc ()
 	response = bf.getHttpContent (rtn.hostname, url)
 	if len (response[1]) == 0:
-		print "can not download..."
+		print "can not download...  maybe GET request is abnormal."
 	else:
 		if re.match("200 OK", response[1], re.IGNORECASE):
 			print "downloaded  (status=%s) (%d bytes)" % (response[1], len(response[0]))
 
-			f = open ("download.data", "w")
+			if os.path.exists (dlFullPath):
+				n = 1
+				while True:
+					if not os.path.exists ("%s.%d" % (dlFullPath, n)):
+						break
+					n = n + 1
+
+				dlFullPath = "%s.%d" % (dlFullPath, n)
+
+			f = open (dlFullPath, "w")
 			try:
 				f.write (response[0])
 			finally:
 				f.close ()
-				print "save %s/download.data" % os.path.abspath(os.path.dirname(__file__))
+				print "save %s" % dlFullPath
 
 		else:
 			print "can not download...  (status=%s)" % response[1]
@@ -2415,7 +2439,7 @@ def debugPrint(msg):
 			print compMsg
 
 def usage(arg):
-	print "Usage: %s <ifname>" % arg
+	print "Usage: %s ifname" % arg
 
 def sigHandler(signum, frame):
 	debugPrint("catch signal %d %s" % (signum, frame))

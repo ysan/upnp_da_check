@@ -172,7 +172,7 @@ Tool in the command
 
 Platforms
 ------------
-Ubuntu, Fedora
+Linux generally will be ok. (confirmed worked on Ubuntu, Fedora)
 
 These in operation verification settled.
 I think when you work with other distributions.
