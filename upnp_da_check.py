@@ -214,33 +214,39 @@ class DeviceInfo():
 
 
 	def printListFormat(self):
-#		print "%3d: %-15s %s [%s] %s  %s" % (self.__idx, self.__addr, self.__successPerGetScpd, self.__friendlyName, self.__manufactureName, self.__loc)
-		print "%s [%5d] %s [%s] %s  %s" % (self.__usn, self.__age, self.__successPerGetScpd, self.__friendlyName, self.__manufactureName, self.__loc)
+		print "%s %5d %s [%s] [%s] %s" % (self.__usn.ljust(45)[:45], self.__age, self.__successPerGetScpd,
+												self.__friendlyName.ljust(20)[:20], self.__manufactureName.ljust(20)[:20], self.__loc)
 
 	def printInfo(self):
-		self.printListFormat()
-
+		print "==============================="
 		print "====      Detail Info      ===="
+		print "==============================="
 		print ""
 		print "---- Discover Packet ----"
+		print ""
 		print self.__content
 		print ""
 		print "---- Location Info ----"
+		print ""
 		print "LocUrlBase:[%s]" % self.getLocUrlBase()
 		print "UrlBase:[%s]" % self.__urlBase
 		print "UDN:[%s]" % self.__udn
 		print "FriendlyName:[%s]" % self.__friendlyName
 		print "DeviceType:[%s]" % self.__deviceType
 		print "ManufactureName:[%s]" % self.__manufactureName
-		print "DlnaType:[%s]" % self.__dlnaType
+		if len (self.__dlnaType) > 0:
+			print "Dlna:[%s]" % self.__dlnaType
 		print ""
 #		debugPrint(self.__locContent)
 		print "---- Service List ----"
+		print ""
 		if len(self.__serviceListMap) > 0:
 			for key in self.__serviceListMap:
 				serviceInfo = self.__serviceListMap[key]
 
+				print "---------------------------------------------------------------------------------"
 				print "ServiceType:[%s] ScpdUrl:[%s]" % (serviceInfo.getType(), serviceInfo.getScpdUrl())
+				print ""
 #				debugPrint(serviceInfo.getScpdContent())
 #				debugPrint(str(serviceInfo.getServiceStateTableMap().items()))
 				if len(serviceInfo.getActionListMap()) > 0:
@@ -285,11 +291,11 @@ class DeviceInfo():
 												
 								print "       [(%s)%s] ...(type: %s) %s%s" % (argl.getDirection(), argl.getName(), dataType, valueList, range)
 
-							print ""
 
 				else:
 					print " - action is none."
 
+				print "---------------------------------------------------------------------------------"
 				print ""
 		else:
 			print "none."
@@ -710,13 +716,13 @@ class MulticastReceiveThread(threading.Thread):
 	def toggle(self):
 		if self.__isEnable:
 			self.__isEnable = False
-			print "[Multicast receive stop]"
+			print "[UPnP multicast receive stop]"
 		else:
 			self.__isEnable = True
 			self.__cond.acquire()
 			self.__cond.notify()
 			self.__cond.release()
-			print "[Multicast receive start]"
+			print "[UPnP multicast receive start]"
 
 	def isEnable(self):
 		return self.__isEnable
@@ -795,7 +801,7 @@ class TimerThread(threading.Thread):
 			for key in gDeviceInfoMap:
 				info = gDeviceInfoMap[key]
 				info.decAge()
-				if info.getAge() == 0:
+				if info.getAge() <= 0:
 					debugPrint("age is 0. [%s]" % key)
 
 					# disable queue @ this usn
@@ -851,13 +857,13 @@ class TimerThread(threading.Thread):
 	def toggle(self):
 		if self.__isEnable:
 			self.__isEnable = False
-			print "[Cache-Control disable]"
+			print "[cache-control(max-age) disable]"
 		else:
 			self.__isEnable = True
 			self.__cond.acquire()
 			self.__cond.notify()
 			self.__cond.release()
-			print "[Cache-Control enable]"
+			print "[cache-control(max-age) enable]"
 
 	def isEnable(self):
 		return self.__isEnable
@@ -1912,8 +1918,6 @@ def action(arg):
 		info = dcpMap[arg]
 		if info.getState() is State.ANALYZED:
 
-			info.printListFormat()
-
 			if len(info.getServiceListMap()) == 0:
 				print "Service is none."
 				del dcpMap
@@ -2001,6 +2005,9 @@ def listDevice (arg=None):
 		print "none."
 		del dcpMap
 		return
+
+	print "UDN                                           AGE    S/S FriendlyName           ManufactureName        LocationUrl"
+	print "--------------------------------------------- ----- ---- ---------------------- ---------------------- -------------------------------------"
 
 	if arg is None:
 		n = 0
@@ -2159,14 +2166,14 @@ def putsGlobalState():
 	print ("workerThread queue: [Hi:%d, Mid:%d, Lo:%d]" % (h, m, l))
 
 	if gMRThread.isEnable():
-		print "Multicast receive: [running]"
+		print "UPnP multicast receive: [running]"
 	else:
-		print "Multicast receive: [stop]"
+		print "UPnP multicast receive: [stop]"
 
 	if gTimerThread.isEnable():
-		print "Cache-Control: [enable]"
+		print "cache-control(max-age): [enable]"
 	else:
-		print "Cache-Control: [disable]"
+		print "cache-control(max-age): [disable]"
 
 	if gIsDebugPrint:
 		print "debug print: [on]"
@@ -2191,8 +2198,8 @@ def showHelp():
 	print "  an  UDN                        - analyze device (connect to device and get device info.)"
 	print "  info  UDN                      - show device info"
 	print "  act  UDN                       - send action to device"
-	print "  r                              - join multicast group (toggle on(def)/off)"
-	print "  t                              - cache-control (toggle enable(def)/disable)"
+	print "  r                              - join UPnP multicast group (toggle on(def)/off)"
+	print "  t                              - cache-control(max-age) (toggle enable(def)/disable)"
 	print "  sc  [ipaddr]                   - send SSDP M-SEARCH"
 	print "  sd  http-url                   - simple HTTP downloader"
 	print "  ss                             - show status"
