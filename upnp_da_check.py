@@ -807,8 +807,9 @@ class TimerThread(threading.Thread):
 					# disable queue @ this usn
 					self.__disableAnalyzeQueue(key)
 
-					if gWorkerThread.getNowExecQue() is not None:
-						if (gWorkerThread.getNowExecQue().cbFunc != analyze) or (gWorkerThread.getNowExecQue().arg.getUsn() != key):
+					nowExecQue = gWorkerThread.getNowExecQue()
+					if nowExecQue is not None:
+						if (nowExecQue.cbFunc != analyze) or (nowExecQue.arg.getUsn() != key):
 							delKeyList.append(key)
 						else:
 							debugPrint("[%s] is analyzing. don't detele." % key)
@@ -1787,7 +1788,8 @@ def msearch (arg):
 
 def sendMsearch (arg=None):
 	if arg is None:
-		if (gWorkerThread.getNowExecQue() is not None) and (gWorkerThread.getNowExecQue().cbFunc == msearch):
+		nowExecQue = gWorkerThread.getNowExecQue()
+		if (nowExecQue is not None) and (nowExecQue.cbFunc == msearch):
 			print "now running..."
 		else:
 			q = gBaseQue.get(Priority.MID)
