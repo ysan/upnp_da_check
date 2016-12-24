@@ -1065,10 +1065,10 @@ class BaseFunc():
 	# return tuple
 	#     tuple[0]: HTTP response body
 	#     tuple[1]: HTTP status code
-	def __sendrecv(self, addr, port, msg):
+	def __sendrecv(self, addr, port, msg, timeout):
 		try:
 			sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-			sock.settimeout(5)
+			sock.settimeout(timeout)
 			sock.connect((addr, port))
 			sock.send(msg)
 
@@ -1192,7 +1192,7 @@ class BaseFunc():
 		msg += "\r\n"
 		debugPrint(msg)
 
-		return self.__sendrecv(addr, port, msg)
+		return self.__sendrecv(addr, port, msg, 5)
 
 	def postSoapAction(self, addr, url, actionInfo, reqArgList):
 		if addr is None or len(addr) == 0 or\
@@ -1257,7 +1257,7 @@ class BaseFunc():
 
 		debugPrint(msg)
 
-		return self.__sendrecv(addr, port, msg)
+		return self.__sendrecv(addr, port, msg, 20)
 
 	def getSoapResponse(self, xml, actionInfo):
 		resArgList = []
