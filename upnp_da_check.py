@@ -633,9 +633,8 @@ class MulticastReceiveThread(threading.Thread):
 		self.__isEnable = True
 
 	def run(self):
-		# server address = "" --> INADDR_ANY
-		serverAddr = ("", 1900)
 		sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+		serverAddr = ("239.255.255.250", 1900) # server address = "" --> INADDR_ANY
 		sock.bind(serverAddr)
 		mreq = socket.inet_aton("239.255.255.250") + socket.inet_aton(gIfAddr)
 		sock.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, mreq)
@@ -652,61 +651,87 @@ class MulticastReceiveThread(threading.Thread):
 #				debugPrint(buff)
 				strAddr = addr[0]
 
-				loc = self.__getHeader(buff, "Location")
-				usn = self.__getHeader(buff, "USN")
-				nts = self.__getHeader(buff, "NTS")
-				cc = self.__getHeader(buff, "Cache-Control")
+				if re.match("NOTIFY +\* +HTTP/1.1", buff, re.IGNORECASE):
+					#=========== SSDP NOTIFY ===========#
 
-				if (loc is not None) and (usn is not None) and (nts is not None):
+					loc = self.__getHeader(buff, "Location")
+					usn = self.__getHeader(buff, "USN")
+					nts = self.__getHeader(buff, "NTS")
+					cc = self.__getHeader(buff, "Cache-Control")
 
-					spUsn = usn.split("::")
-					keyUsn = spUsn[0]
-					debugPrint("key:[%s]" % keyUsn)
+					if (loc is not None) and (usn is not None) and (nts is not None):
 
-					ageNum = -1
-					if re.search("max-age *=", cc, re.IGNORECASE):
-						spCc = cc.split("=")
-						age = spCc[1].strip()
-						if age.isdigit():
-							ageNum = long(age)
+						spUsn = usn.split("::")
+						keyUsn = spUsn[0]
+						debugPrint("key:[%s]" % keyUsn)
 
-					# lock
-					gLockDeviceInfoMap.acquire()
+						ageNum = -1
+						if re.search("max-age *=", cc, re.IGNORECASE):
+							spCc = cc.split("=")
+							age = spCc[1].strip()
+							if age.isdigit():
+								ageNum = long(age)
 
-					if re.match("ssdp *: *alive", nts, re.IGNORECASE):
-						if gDeviceInfoMap.has_key(keyUsn):
-							# mod hash map
-							gDeviceInfoMap[keyUsn].clearForModMap()
-							gDeviceInfoMap[keyUsn].setContent(buff)
-							gDeviceInfoMap[keyUsn].setIpAddr(strAddr)
-							gDeviceInfoMap[keyUsn].setLocUrl(loc)
-							gDeviceInfoMap[keyUsn].setUsn(keyUsn)
-							gDeviceInfoMap[keyUsn].setAge(ageNum)
+						# lock
+						gLockDeviceInfoMap.acquire()
 
-						else:
-							# add hash map
-							gDeviceInfoMap[keyUsn] = DeviceInfo(0, buff, strAddr, loc, keyUsn, ageNum)
+						if re.match("ssdp *: *alive", nts, re.IGNORECASE):
+							if gDeviceInfoMap.has_key(keyUsn):
+								# mod hash map
+								gDeviceInfoMap[keyUsn].clearForModMap()
+								gDeviceInfoMap[keyUsn].setContent(buff)
+								gDeviceInfoMap[keyUsn].setIpAddr(strAddr)
+								gDeviceInfoMap[keyUsn].setLocUrl(loc)
+								gDeviceInfoMap[keyUsn].setUsn(keyUsn)
+								gDeviceInfoMap[keyUsn].setAge(ageNum)
 
-
-						##################################
-						# not queuing if there is piled in that queue at the same [usn]
-						if not self.__checkAlreadyQueuing(keyUsn):
-							Message.sendAsync(analyze, True, gDeviceInfoMap[keyUsn], Priority.LOW)
-#							msg = Message (analyze, True, gDeviceInfoMap[keyUsn], Priority.LOW)
-#							msg.sendAsync()
-						else:
-							debugPrint("not queuing")
-						##################################
+							else:
+								# add hash map
+								gDeviceInfoMap[keyUsn] = DeviceInfo(0, buff, strAddr, loc, keyUsn, ageNum)
 
 
-					elif re.match("ssdp *: *byebye", nts, re.IGNORECASE):
-						if gDeviceInfoMap.has_key(keyUsn):
+							##################################
+							# not queuing if there is piled in that queue at the same [usn]
+							if not self.__checkAlreadyQueuing(keyUsn):
+								Message.sendAsync(analyze, True, gDeviceInfoMap[keyUsn], Priority.LOW)
+#								msg = Message (analyze, True, gDeviceInfoMap[keyUsn], Priority.LOW)
+#								msg.sendAsync()
+							else:
+								debugPrint("not queuing")
+							##################################
 
-							# delete in timerThread
-							gDeviceInfoMap[keyUsn].setAge(0)
 
-					# unlock
-					gLockDeviceInfoMap.release()
+						elif re.match("ssdp *: *byebye", nts, re.IGNORECASE):
+							if gDeviceInfoMap.has_key(keyUsn):
+
+								# delete in timerThread
+								gDeviceInfoMap[keyUsn].setAge(0)
+
+						# unlock
+						gLockDeviceInfoMap.release()
+
+
+				elif re.match("M-SEARCH +\* +HTTP/1.1", buff, re.IGNORECASE):
+					#=========== SSDP M-SEARCH ===========#
+
+					host = self.__getHeader(buff, "HOST")
+					st = self.__getHeader(buff, "ST")
+					print host
+					print st
+					print strAddr
+
+					msg  = "HTTP/1.1 200 OK\r\n"
+					msg += "Cache-Control: max-age=1800\r\n"
+					msg += "ST: %s\r\n" % st
+					msg += "USN: uuid:%s::%s\r\n" % ("puseudo", st)
+					msg += "EXT:\r\n"
+					msg += "Server:\r\n"
+					msg += "Location: http://%s:%d/test.xml\r\n" % (gIfAddr, 50000)
+					msg += "\r\n"
+
+					print msg
+					s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+					s.sendto(msg, (strAddr, 1900))
 
 			except:
 				putsExceptMsg()
@@ -1537,14 +1562,16 @@ class ControlPoint (BaseFunc):
 			isMulticast = True
 		else:
 			dstAddr = ipAddr
-			isMulticast = False
+			isMulticast = False # unicast
 
 		print "M-SEARCH start."
 
 		sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 		sock.settimeout(MSEARCH_TIMEOUT)
+		serverAddr = (gIfAddr, 1900) # server address = "" --> INADDR_ANY
+		sock.bind(serverAddr)
 		if isMulticast:
-			sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_LOOP, 0)
+#			sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_LOOP, 0)
 			sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_IF, socket.inet_aton(gIfAddr))
 			sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, MSEARCH_TTL)
 
@@ -1552,7 +1579,7 @@ class ControlPoint (BaseFunc):
 		req += "HOST: 239.255.255.250:1900\r\n"
 		req += "MAN: \"ssdp:discover\"\r\n"
 		req += "MX: %d\r\n" % MSEARCH_TIMEOUT
-		req += "ST:upnp:rootdevice\r\n"
+		req += "ST: upnp:rootdevice\r\n"
 		req += "\r\n"
 
 		sock.sendto(req, (dstAddr, 1900))
@@ -1567,6 +1594,10 @@ class ControlPoint (BaseFunc):
 
 				res = HttpResponse(buff)
 				if res is not None:
+					if res.status != 200:
+						debugPrint("%d %s ... while continue" % (res.status, res.reason))
+						continue
+
 					loc = res.getheader("Location")
 					usn = res.getheader("USN")
 					cc = res.getheader("Cache-Control")
