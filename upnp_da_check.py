@@ -25,6 +25,9 @@ import time
 import itertools
 import copy
 import os
+import struct
+import SimpleHTTPServer
+import SocketServer
 
 
 NAMESPACE_UPNP_DEVICE   = "urn:schemas-upnp-org:device-1-0"
@@ -49,10 +52,13 @@ NAMESPACE_XMLSOAP_ENV   = "http://schemas.xmlsoap.org/soap/envelope/"
 ENCODING_STYLE_XMLSOAP  = "http://schemas.xmlsoap.org/soap/encoding/"
 
 SIOCGIFADDR = 0x8915
+SIOCGIFHWADDR = 0x8927
 
 MSEARCH_TTL = 4
 MSEARCH_TIMEOUT = 5
 
+DEVICE_HOST_PORT = 50000
+DEVICE_DISCRIPTION_PATH = "ssdp/device-desc.xml"
 
 gDeviceInfoMap = {}
 gCmdList = []
@@ -60,13 +66,18 @@ gBeforeCmd = ""
 gChunkedRemain = 0
 gIfAddr = ""
 gIfName = ""
+gHwAddr = ""
+gUdn = ""
 gIsCatchSigInt = False
 gIsDebugPrint = False
 gBaseQue = None
 gWorkerThread = None
 gMRThread = None
 gTimerThread = None
+gMsearchThread = None
+gDeviceHostServerThread = None
 gLockDeviceInfoMap = threading.Lock()
+gIsEnableDeviceHost = False
 
 
 class State(Enum):
@@ -581,6 +592,22 @@ class Message():
 #		msg = MessageObject (self.__cbFunc, self.__isNeedArg, self.__arg, None, False, self.__priority, "by_msearch")
 #		gBaseQue.enQue(msg)
 
+class OneShotThread (threading.Thread):
+	def __init__(self, arg):
+		super(OneShotThread, self).__init__()
+		self.daemon = True
+		self.__cbFunc = arg
+		self.__isRunning = False
+
+	def run(self):
+		if self.__cbFunc is not None:
+			self.__isRunning = True
+			self.__cbFunc ()
+			self.__isRunning = False
+
+	def isRunning (self):
+		return self.__isRunning
+
 class WorkerThread (threading.Thread):
 	def __init__(self):
 		super(WorkerThread, self).__init__()
@@ -625,148 +652,8 @@ class WorkerThread (threading.Thread):
 	def getNowExecQue(self):
 		return copy.deepcopy(self.__nowExecQue)
 
-class MulticastReceiveThread(threading.Thread):
-	def __init__(self):
-		super(MulticastReceiveThread, self).__init__()
-		self.daemon = True
-		self.__cond = Condition()
-		self.__isEnable = True
-
-	def run(self):
-		sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-		serverAddr = ("239.255.255.250", 1900) # server address = "" --> INADDR_ANY
-		sock.bind(serverAddr)
-		mreq = socket.inet_aton("239.255.255.250") + socket.inet_aton(gIfAddr)
-		sock.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, mreq)
-
-		while True:
-			try:
-				if not self.__isEnable:
-					self.__cond.acquire()
-					self.__cond.wait()
-					self.__cond.release()
-
-				buff, addr = sock.recvfrom(4096)
-#				debugPrint(str(addr))
-#				debugPrint(buff)
-				strAddr = addr[0]
-
-				if re.match("NOTIFY +\* +HTTP/1.1", buff, re.IGNORECASE):
-					#=========== SSDP NOTIFY ===========#
-
-					loc = self.__getHeader(buff, "Location")
-					usn = self.__getHeader(buff, "USN")
-					nts = self.__getHeader(buff, "NTS")
-					cc = self.__getHeader(buff, "Cache-Control")
-
-					if (loc is not None) and (usn is not None) and (nts is not None):
-
-						spUsn = usn.split("::")
-						keyUsn = spUsn[0]
-						debugPrint("key:[%s]" % keyUsn)
-
-						ageNum = -1
-						if re.search("max-age *=", cc, re.IGNORECASE):
-							spCc = cc.split("=")
-							age = spCc[1].strip()
-							if age.isdigit():
-								ageNum = long(age)
-
-						# lock
-						gLockDeviceInfoMap.acquire()
-
-						if re.match("ssdp *: *alive", nts, re.IGNORECASE):
-							if gDeviceInfoMap.has_key(keyUsn):
-								# mod hash map
-								gDeviceInfoMap[keyUsn].clearForModMap()
-								gDeviceInfoMap[keyUsn].setContent(buff)
-								gDeviceInfoMap[keyUsn].setIpAddr(strAddr)
-								gDeviceInfoMap[keyUsn].setLocUrl(loc)
-								gDeviceInfoMap[keyUsn].setUsn(keyUsn)
-								gDeviceInfoMap[keyUsn].setAge(ageNum)
-
-							else:
-								# add hash map
-								gDeviceInfoMap[keyUsn] = DeviceInfo(0, buff, strAddr, loc, keyUsn, ageNum)
-
-
-							##################################
-							# not queuing if there is piled in that queue at the same [usn]
-							if not self.__checkAlreadyQueuing(keyUsn):
-								Message.sendAsync(analyze, True, gDeviceInfoMap[keyUsn], Priority.LOW)
-#								msg = Message (analyze, True, gDeviceInfoMap[keyUsn], Priority.LOW)
-#								msg.sendAsync()
-							else:
-								debugPrint("not queuing")
-							##################################
-
-
-						elif re.match("ssdp *: *byebye", nts, re.IGNORECASE):
-							if gDeviceInfoMap.has_key(keyUsn):
-
-								# delete in timerThread
-								gDeviceInfoMap[keyUsn].setAge(0)
-
-						# unlock
-						gLockDeviceInfoMap.release()
-
-
-				elif re.match("M-SEARCH +\* +HTTP/1.1", buff, re.IGNORECASE):
-					#=========== SSDP M-SEARCH ===========#
-
-					host = self.__getHeader(buff, "HOST")
-					st = self.__getHeader(buff, "ST")
-					print host
-					print st
-					print strAddr
-
-					msg  = "HTTP/1.1 200 OK\r\n"
-					msg += "Cache-Control: max-age=1800\r\n"
-					msg += "ST: %s\r\n" % st
-					msg += "USN: uuid:%s::%s\r\n" % ("puseudo", st)
-					msg += "EXT:\r\n"
-					msg += "Server:\r\n"
-					msg += "Location: http://%s:%d/test.xml\r\n" % (gIfAddr, 50000)
-					msg += "\r\n"
-
-					print msg
-					s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-					s.sendto(msg, (strAddr, 1900))
-
-			except:
-				putsExceptMsg()
-
-		sock.close()
-
-	def toggle(self):
-		if self.__isEnable:
-			self.__isEnable = False
-			print "[UPnP multicast receive stop]"
-		else:
-			self.__isEnable = True
-			self.__cond.acquire()
-			self.__cond.notify()
-			self.__cond.release()
-			print "[UPnP multicast receive start]"
-
-	def isEnable(self):
-		return self.__isEnable
-
-	def __checkAlreadyQueuing(self, keyUsn):
-		isFound = False
-		# Priority.LOW is multicast receive
-		q = gBaseQue.get(Priority.LOW)
-		qList = q[0]
-		qCond = q[1]
-		qCond.acquire()
-		if len(qList) > 0:
-			for it in iter(qList):
-				if it.arg.getUsn() == keyUsn:
-					isFound = True
-		qCond.release()
-		return isFound
-
-	def __getHeader(self, content, pattern):
+class BaseFunc():
+	def getHeader(self, content, pattern):
 		if content is None or content == "" or\
 			pattern is None or pattern == "":
 			return None
@@ -801,101 +688,7 @@ class MulticastReceiveThread(threading.Thread):
 
 		return None
 
-class TimerThread(threading.Thread):
-	def __init__(self):
-		super(TimerThread, self).__init__()
-		self.daemon = True
-		self.__cond = Condition()
-		self.__isEnable = True
-
-	def run(self):
-		while True:
-			if not self.__isEnable:
-				self.__cond.acquire()
-				self.__cond.wait()
-				self.__cond.release()
-
-			time.sleep(1)
-			self.__refreshAge()
-
-	def __refreshAge(self):
-		gLockDeviceInfoMap.acquire() # lock
-
-		delKeyList = []
-		if len(gDeviceInfoMap) > 0:
-			for key in gDeviceInfoMap:
-				info = gDeviceInfoMap[key]
-				info.decAge()
-				if info.getAge() <= 0:
-					debugPrint("age is 0. [%s]" % key)
-
-					# disable queue @ this usn
-					self.__disableAnalyzeQueue(key)
-
-					nowExecQue = gWorkerThread.getNowExecQue()
-					if nowExecQue is not None:
-						if (nowExecQue.cbFunc != analyze) or (nowExecQue.arg.getUsn() != key):
-							delKeyList.append(key)
-						else:
-							debugPrint("[%s] is analyzing. don't detele." % key)
-					else:
-						delKeyList.append(key)
-
-			if len(delKeyList) > 0:
-				for itKey in iter(delKeyList):
-					# delete hash map
-					del gDeviceInfoMap[itKey]
-					debugPrint("delete hash map:[%s]" % itKey)
-
-		gLockDeviceInfoMap.release() # unlock
-
-	def __disableAnalyzeQueue (self, usn):
-		q = gBaseQue.get(Priority.HIGH)
-		qList = q[0]
-		qCond = q[1]
-		qCond.acquire()
-		if len(qList) > 0:
-			for it in iter(qList):
-				if it.cbFunc == analyze and it.arg.getUsn() == usn:
-					it.isEnable = False
-		qCond.release()
-
-		q = gBaseQue.get(Priority.MID)
-		qList = q[0]
-		qCond = q[1]
-		qCond.acquire()
-		if len(qList) > 0:
-			for it in iter(qList):
-				if it.cbFunc == analyze and it.arg.getUsn() == usn:
-					it.isEnable = False
-		qCond.release()
-
-		q = gBaseQue.get(Priority.LOW)
-		qList = q[0]
-		qCond = q[1]
-		qCond.acquire()
-		if len(qList) > 0:
-			for it in iter(qList):
-				if it.cbFunc == analyze and it.arg.getUsn() == usn:
-					it.isEnable = False
-		qCond.release()
-
-	def toggle(self):
-		if self.__isEnable:
-			self.__isEnable = False
-			print "[cache-control(max-age) disable]"
-		else:
-			self.__isEnable = True
-			self.__cond.acquire()
-			self.__cond.notify()
-			self.__cond.release()
-			print "[cache-control(max-age) enable]"
-
-	def isEnable(self):
-		return self.__isEnable
-
-class BaseFunc():
-	def __recvSocket(self, sock):
+	def recvSocket(self, sock):
 		debugPrint("recvSocket")
 		totalData = ""
 		isContinue = False
@@ -1087,10 +880,20 @@ class BaseFunc():
 		debugPrint("isHexCharOnly true")
 		return True
 
+	def sendOnUdp(self, addr, port, msg):
+		if addr is None or len(addr) == 0 or\
+			port is None or port == 0 or\
+			msg is None or len(msg) == 0:
+			return
+
+		s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+		s.sendto(msg, (addr, port))
+		s.close()
+
 	# return tuple
 	#     tuple[0]: HTTP response body
 	#     tuple[1]: HTTP status code
-	def __sendrecv(self, addr, port, msg, timeout):
+	def __sendrecvOnTcp(self, addr, port, msg, timeout):
 		try:
 			sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 			sock.settimeout(timeout)
@@ -1104,7 +907,7 @@ class BaseFunc():
 			crtn = 0
 
 			while True:
-				buff = self.__recvSocket(sock)
+				buff = self.recvSocket(sock)
 				if buff is None:
 					break
 
@@ -1217,7 +1020,7 @@ class BaseFunc():
 		msg += "\r\n"
 		debugPrint(msg)
 
-		return self.__sendrecv(addr, port, msg, 5)
+		return self.__sendrecvOnTcp(addr, port, msg, 5)
 
 	def postSoapAction(self, addr, url, actionInfo, reqArgList):
 		if addr is None or len(addr) == 0 or\
@@ -1282,7 +1085,7 @@ class BaseFunc():
 
 		debugPrint(msg)
 
-		return self.__sendrecv(addr, port, msg, 20)
+		return self.__sendrecvOnTcp(addr, port, msg, 20)
 
 	def getSoapResponse(self, xml, actionInfo):
 		resArgList = []
@@ -1544,6 +1347,307 @@ class BaseFunc():
 			putsExceptMsg()
 			return serviceStateTableMap
 
+class MulticastReceiveThread(threading.Thread, BaseFunc):
+	def __init__(self):
+		super(MulticastReceiveThread, self).__init__()
+		self.daemon = True
+		self.__cond = Condition()
+		self.__isEnable = True
+
+	def run(self):
+		sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+		serverAddr = ("239.255.255.250", 1900) # server address = "" --> INADDR_ANY
+		sock.bind(serverAddr)
+		mreq = socket.inet_aton("239.255.255.250") + socket.inet_aton(gIfAddr)
+		sock.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, mreq)
+
+		while True:
+			try:
+				if not self.__isEnable:
+					self.__cond.acquire()
+					self.__cond.wait()
+					self.__cond.release()
+
+				buff, addr = sock.recvfrom(4096)
+#				debugPrint(str(addr))
+#				debugPrint(buff)
+				strAddr = addr[0]
+
+				if re.match("NOTIFY +\* +HTTP/1.1", buff, re.IGNORECASE):
+					#=========== SSDP NOTIFY ===========#
+
+					loc = self.getHeader(buff, "Location")
+					usn = self.getHeader(buff, "USN")
+					nts = self.getHeader(buff, "NTS")
+					cc = self.getHeader(buff, "Cache-Control")
+
+					if (loc is not None) and (usn is not None) and (nts is not None):
+
+						spUsn = usn.split("::")
+						keyUsn = spUsn[0]
+						debugPrint("key:[%s]" % keyUsn)
+
+						ageNum = -1
+						if re.search("max-age *=", cc, re.IGNORECASE):
+							spCc = cc.split("=")
+							age = spCc[1].strip()
+							if age.isdigit():
+								ageNum = long(age)
+
+						# lock
+						gLockDeviceInfoMap.acquire()
+
+						if re.match("ssdp *: *alive", nts, re.IGNORECASE):
+							if gDeviceInfoMap.has_key(keyUsn):
+								# mod hash map
+								gDeviceInfoMap[keyUsn].clearForModMap()
+								gDeviceInfoMap[keyUsn].setContent(buff)
+								gDeviceInfoMap[keyUsn].setIpAddr(strAddr)
+								gDeviceInfoMap[keyUsn].setLocUrl(loc)
+								gDeviceInfoMap[keyUsn].setUsn(keyUsn)
+								gDeviceInfoMap[keyUsn].setAge(ageNum)
+
+							else:
+								# add hash map
+								gDeviceInfoMap[keyUsn] = DeviceInfo(0, buff, strAddr, loc, keyUsn, ageNum)
+
+
+							##################################
+							# not queuing if there is piled in that queue at the same [usn]
+							if not self.__checkAlreadyQueuing(keyUsn):
+								Message.sendAsync(analyze, True, gDeviceInfoMap[keyUsn], Priority.LOW)
+#								msg = Message (analyze, True, gDeviceInfoMap[keyUsn], Priority.LOW)
+#								msg.sendAsync()
+							else:
+								debugPrint("not queuing")
+							##################################
+
+
+						elif re.match("ssdp *: *byebye", nts, re.IGNORECASE):
+							if gDeviceInfoMap.has_key(keyUsn):
+
+								# delete in timerThread
+								gDeviceInfoMap[keyUsn].setAge(0)
+
+						# unlock
+						gLockDeviceInfoMap.release()
+
+
+				elif re.match("M-SEARCH +\* +HTTP/1.1", buff, re.IGNORECASE):
+					#=========== SSDP M-SEARCH ===========#
+
+					if not gIsEnableDeviceHost:
+						continue
+
+					host = self.getHeader(buff, "HOST")
+					st = self.getHeader(buff, "ST")
+
+					if re.match("upnp *: *rootdevice", st, re.IGNORECASE):
+
+						msg  = "HTTP/1.1 200 OK\r\n"
+						msg += "Cache-Control: max-age=1800\r\n"
+						msg += "ST: %s\r\n" % st
+						msg += "USN: %s::%s\r\n" % (gUdn, st)
+						msg += "EXT:\r\n"
+						msg += "Server:\r\n"
+						msg += "Location: http://%s:%d/%s\r\n" % (gIfAddr, DEVICE_HOST_PORT, DEVICE_DISCRIPTION_PATH)
+						msg += "\r\n"
+
+						debugPrint (msg)
+
+						argTuple = (strAddr, 1900, msg)
+						Message.sendAsync(sendOnUdp, True, argTuple, Priority.HIGH)
+
+			except:
+				putsExceptMsg()
+
+		sock.close()
+
+	def toggle(self):
+		if self.__isEnable:
+			self.__isEnable = False
+			print "[UPnP multicast receive stop]"
+		else:
+			self.__isEnable = True
+			self.__cond.acquire()
+			self.__cond.notify()
+			self.__cond.release()
+			print "[UPnP multicast receive start]"
+
+	def isEnable(self):
+		return self.__isEnable
+
+	def __checkAlreadyQueuing(self, keyUsn):
+		isFound = False
+		# Priority.LOW is multicast receive
+		q = gBaseQue.get(Priority.LOW)
+		qList = q[0]
+		qCond = q[1]
+		qCond.acquire()
+		if len(qList) > 0:
+			for it in iter(qList):
+				if it.arg.getUsn() == keyUsn:
+					isFound = True
+		qCond.release()
+		return isFound
+
+class TimerThread(threading.Thread):
+	def __init__(self):
+		super(TimerThread, self).__init__()
+		self.daemon = True
+		self.__cond = Condition()
+		self.__isEnable = True
+
+	def run(self):
+		while True:
+			if not self.__isEnable:
+				self.__cond.acquire()
+				self.__cond.wait()
+				self.__cond.release()
+
+			time.sleep(1)
+			self.__refreshAge()
+
+	def __refreshAge(self):
+		gLockDeviceInfoMap.acquire() # lock
+
+		delKeyList = []
+		if len(gDeviceInfoMap) > 0:
+			for key in gDeviceInfoMap:
+				info = gDeviceInfoMap[key]
+				info.decAge()
+				if info.getAge() <= 0:
+					debugPrint("age is 0. [%s]" % key)
+
+					# disable queue @ this usn
+					self.__disableAnalyzeQueue(key)
+
+					nowExecQue = gWorkerThread.getNowExecQue()
+					if nowExecQue is not None:
+						if (nowExecQue.cbFunc != analyze) or (nowExecQue.arg.getUsn() != key):
+							delKeyList.append(key)
+						else:
+							debugPrint("[%s] is analyzing. don't detele." % key)
+					else:
+						delKeyList.append(key)
+
+			if len(delKeyList) > 0:
+				for itKey in iter(delKeyList):
+					# delete hash map
+					del gDeviceInfoMap[itKey]
+					debugPrint("delete hash map:[%s]" % itKey)
+
+		gLockDeviceInfoMap.release() # unlock
+
+	def __disableAnalyzeQueue (self, usn):
+		q = gBaseQue.get(Priority.HIGH)
+		qList = q[0]
+		qCond = q[1]
+		qCond.acquire()
+		if len(qList) > 0:
+			for it in iter(qList):
+				if it.cbFunc == analyze and it.arg.getUsn() == usn:
+					it.isEnable = False
+		qCond.release()
+
+		q = gBaseQue.get(Priority.MID)
+		qList = q[0]
+		qCond = q[1]
+		qCond.acquire()
+		if len(qList) > 0:
+			for it in iter(qList):
+				if it.cbFunc == analyze and it.arg.getUsn() == usn:
+					it.isEnable = False
+		qCond.release()
+
+		q = gBaseQue.get(Priority.LOW)
+		qList = q[0]
+		qCond = q[1]
+		qCond.acquire()
+		if len(qList) > 0:
+			for it in iter(qList):
+				if it.cbFunc == analyze and it.arg.getUsn() == usn:
+					it.isEnable = False
+		qCond.release()
+
+	def toggle(self):
+		if self.__isEnable:
+			self.__isEnable = False
+			print "[cache-control(max-age) disable]"
+		else:
+			self.__isEnable = True
+			self.__cond.acquire()
+			self.__cond.notify()
+			self.__cond.release()
+			print "[cache-control(max-age) enable]"
+
+	def isEnable(self):
+		return self.__isEnable
+
+class DeviceHostServerThread(threading.Thread, BaseFunc):
+	def __init__(self):
+		super(DeviceHostServerThread, self).__init__()
+		self.daemon = True
+		self.__cond = Condition()
+		self.__isEnable = False
+
+	def run(self):
+		sock = None
+
+		while True:
+			try:
+				if not self.__isEnable:
+					if sock is not None:
+						sock.close ()
+
+					self.__cond.acquire()
+					self.__cond.wait()
+					self.__cond.release()
+
+					sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+					sock.settimeout(2) # accept timeout
+					sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+					serverAddr = ("", DEVICE_HOST_PORT) # server address = "" --> INADDR_ANY
+					sock.bind(serverAddr)
+					#TODO
+					sock.listen(20)
+
+				conn, addr = sock.accept()
+
+				buff = self.recvSocket (conn)
+				if buff is None:
+					continue
+
+				print buff
+				conn.send(buff)
+
+				conn.close()
+
+			except socket.timeout:
+				print "accept timeout"
+				continue
+
+			except:
+				putsExceptMsg()
+				break
+
+	def toggle(self):
+		if self.__isEnable:
+			self.__isEnable = False
+			print "[pseudo DeviceHost server disable]"
+		else:
+			self.__isEnable = True
+			self.__cond.acquire()
+			self.__cond.notify()
+			self.__cond.release()
+			print "[pseudo DeviceHost server enable]"
+
+	def isEnable(self):
+		return self.__isEnable
+
+	def __getHttpPath (self, method, content):
+		print "TODO"
+
 class ControlPoint (BaseFunc):
 	def __init__(self, arg0=None, arg1=None, arg2=None, arg3=None):
 		self.__arg0 = arg0
@@ -1561,6 +1665,10 @@ class ControlPoint (BaseFunc):
 			dstAddr = "239.255.255.250"
 			isMulticast = True
 		else:
+			if ipAddr == "127.0.0.1" or ipAddr == gIfAddr:
+				print "can not send M-SEARCH to myself with unicast..."
+				return
+
 			dstAddr = ipAddr
 			isMulticast = False # unicast
 
@@ -1813,15 +1921,22 @@ class ControlPoint (BaseFunc):
 
 		return (resArgList, responseStatus, responseBody)
 
+# workerThreadQue-IF
 def msearch (arg):
+	global gMsearchThread
+
+	if gMsearchThread is not None and gMsearchThread.isRunning():
+		print "M-SEARCH is running...  cancel."
+		return
+
 	cp = ControlPoint (arg)
-	cp.msearch()
+	gMsearchThread = OneShotThread (cp.msearch)
+	gMsearchThread.start()
 
 def sendMsearch (arg=None):
 	if arg is None:
-		nowExecQue = gWorkerThread.getNowExecQue()
-		if (nowExecQue is not None) and (nowExecQue.cbFunc == msearch):
-			print "now running..."
+		if gMsearchThread is not None and gMsearchThread.isRunning():
+			print "M-SEARCH is running...  cancel."
 		else:
 			q = gBaseQue.get(Priority.MID)
 			qList = q[0]
@@ -1844,6 +1959,7 @@ def sendMsearch (arg=None):
 		else:
 			print "invalid argument..."
 
+# workerThreadQue-IF
 # args is tupple. for Message().sendSync()
 #
 # return tuple
@@ -2009,6 +2125,16 @@ def action(arg):
 
 	del dcpMap
 
+# workerThreadQue-IF
+# args is tupple. for Message().sendSync()
+def sendOnUdp(args):
+	addr = args[0]
+	port = args[1]
+	msg = args[2]
+
+	bf = BaseFunc ()
+	bf.sendOnUdp(addr, port, msg)
+
 def checkStringNumber(val, min, max):
 	if not val.isdigit():
 		return False
@@ -2108,6 +2234,7 @@ def info(arg):
 
 	del dcpMap
 
+# workerThreadQue-IF
 def analyze(deviceInfo):
 	if deviceInfo is None:
 		return
@@ -2190,14 +2317,22 @@ def getIfAddr(ifName):
 		# The third argument is requesting a 32byte ???
 		result = fcntl.ioctl(s.fileno(), SIOCGIFADDR, (ifName+"\0"*32)[:32])
 	except IOError:
+		s.close()
 		return None
+
+	s.close()
 
 	# The purpose of the data is entered from the results obtained 20byte in ioctl to 23byte th
 	return socket.inet_ntoa(result[20:24])
 
+def getHwAddr(ifname):
+	s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+	info = fcntl.ioctl(s.fileno(), SIOCGIFHWADDR,  struct.pack('256s', ifname[:15]))
+	return ':'.join(['%02x' % ord(char) for char in info[18:24]])
+
 def putsGlobalState():
 	print "--------------------------------"
-	print "interface: [%s (%s)]" % (gIfName, gIfAddr)
+	print "interface: [%s (%s -- %s)]" % (gIfName, gIfAddr, gHwAddr)
 
 	q = gBaseQue.get(Priority.HIGH)
 	qList = q[0]
@@ -2232,6 +2367,11 @@ def putsGlobalState():
 	else:
 		print "cache-control(max-age): [disable]"
 
+	if gIsEnableDeviceHost:
+		print "pseudo UPnP DeviceHost: [enable]"
+	else:
+		print "pseudo UPnP DeviceHost: [disable]"
+
 	if gIsDebugPrint:
 		print "debug print: [on]"
 	else:
@@ -2257,6 +2397,7 @@ def showHelp():
 	print "  act  UDN                       - send action to device"
 	print "  r                              - join UPnP multicast group (toggle on(def)/off)"
 	print "  t                              - cache-control(max-age) (toggle enable(def)/disable)"
+	print "  ddd                            - pseudo UPnP DeviceHost (toggle enable/disable(def))"
 	print "  sc  [ipaddr]                   - send SSDP M-SEARCH"
 	print "  sd  http-url                   - simple HTTP downloader"
 	print "  ss                             - show status"
@@ -2275,6 +2416,7 @@ def cashCommand(cmd):
 
 def checkCommand(cmd):
 	global gIsDebugPrint
+	global gIsEnableDeviceHost
 
 	if cmd is None:
 		return True
@@ -2304,6 +2446,17 @@ def checkCommand(cmd):
 		else:
 			gIsDebugPrint = True
 			print "[debug print on]"
+		cashCommand(cmd)
+
+	elif cmd == "ddd":
+		if gIsEnableDeviceHost:
+			gIsEnableDeviceHost = False
+			print "[pseudo UPnP DeviceHost diable]"
+		else:
+			gIsEnableDeviceHost = True
+			print "[pseudo UPnP DeviceHost enable]"
+		if gDeviceHostServerThread is not None:
+			gDeviceHostServerThread.toggle()
 		cashCommand(cmd)
 
 	elif cmd == "h":
@@ -2484,10 +2637,13 @@ def sigHandler(signum, frame):
 def main(ifName):
 	global gIfAddr
 	global gIfName
+	global gHwAddr
+	global gUdn
 	global gBaseQue
 	global gWorkerThread
 	global gMRThread
 	global gTimerThread
+	global gDeviceHostServerThread
 
 	addr = getIfAddr(ifName)
 	if addr is None:
@@ -2497,6 +2653,9 @@ def main(ifName):
 		gIfAddr = addr
 		gIfName = ifName
 
+	gHwAddr = getHwAddr(ifName)
+	gUdn = "uuid:xxxxxxxx-xxxx-xxxx-xxxx-" + gHwAddr.replace(":","")
+
 	#--  set signal handler
 	signal.signal(signal.SIGINT, sigHandler)
 
@@ -2505,11 +2664,19 @@ def main(ifName):
 	gWorkerThread = WorkerThread()
 	gMRThread = MulticastReceiveThread()
 	gTimerThread = TimerThread()
+#	gDeviceHostServerThread = DeviceHostServerThread()
 
 	#--  start sub thread
 	gWorkerThread.start()
 	gMRThread.start()
 	gTimerThread.start()
+#	gDeviceHostServerThread.start()
+
+	#TODO
+	Handler = SimpleHTTPServer.SimpleHTTPRequestHandler
+	httpd = SocketServer.TCPServer(("", DEVICE_HOST_PORT), Handler)
+	ost = OneShotThread (httpd.serve_forever)
+	ost.start()
 
 	print ""
 	print "== UPnP DA checktool (sniffer) =="
