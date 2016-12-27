@@ -57,6 +57,7 @@ SIOCGIFHWADDR = 0x8927
 MSEARCH_TTL = 4
 MSEARCH_TIMEOUT = 5
 
+UDN_PREFIX = "uuid:ffffffff-ffff-ffff-ffff-"
 DEVICE_HOST_PORT = 50000
 DEVICE_DISCRIPTION_PATH = "ssdp/device-desc.xml"
 
@@ -890,6 +891,19 @@ class BaseFunc():
 		s.sendto(msg, (addr, port))
 		s.close()
 
+	def sendOnUdpMulticast(self, addr, port, msg):
+		if addr is None or len(addr) == 0 or\
+			port is None or port == 0 or\
+			msg is None or len(msg) == 0:
+			return
+
+		s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+#		s.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_LOOP, 0)
+		s.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_IF, socket.inet_aton(gIfAddr))
+		s.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, MSEARCH_TTL)
+		s.sendto(msg, (addr, port))
+		s.close()
+
 	# return tuple
 	#     tuple[0]: HTTP response body
 	#     tuple[1]: HTTP status code
@@ -1372,6 +1386,7 @@ class MulticastReceiveThread(threading.Thread, BaseFunc):
 #				debugPrint(str(addr))
 #				debugPrint(buff)
 				strAddr = addr[0]
+				nport = addr[1]
 
 				if re.match("NOTIFY +\* +HTTP/1.1", buff, re.IGNORECASE):
 					#=========== SSDP NOTIFY ===========#
@@ -1442,21 +1457,22 @@ class MulticastReceiveThread(threading.Thread, BaseFunc):
 					host = self.getHeader(buff, "HOST")
 					st = self.getHeader(buff, "ST")
 
-					if re.match("upnp *: *rootdevice", st, re.IGNORECASE):
+#					if not re.match("upnp *: *rootdevice", st, re.IGNORECASE):
+#						continue
 
-						msg  = "HTTP/1.1 200 OK\r\n"
-						msg += "Cache-Control: max-age=1800\r\n"
-						msg += "ST: %s\r\n" % st
-						msg += "USN: %s::%s\r\n" % (gUdn, st)
-						msg += "EXT:\r\n"
-						msg += "Server:\r\n"
-						msg += "Location: http://%s:%d/%s\r\n" % (gIfAddr, DEVICE_HOST_PORT, DEVICE_DISCRIPTION_PATH)
-						msg += "\r\n"
+					msg  = "HTTP/1.1 200 OK\r\n"
+					msg += "Cache-Control: max-age=1800\r\n"
+					msg += "ST: %s\r\n" % st
+					msg += "USN: %s::%s\r\n" % (gUdn, st)
+					msg += "EXT:\r\n"
+					msg += "Server: \r\n"
+					msg += "Location: http://%s:%d/%s\r\n" % (gIfAddr, DEVICE_HOST_PORT, DEVICE_DISCRIPTION_PATH)
+					msg += "\r\n"
 
-						debugPrint (msg)
+					debugPrint (msg)
 
-						argTuple = (strAddr, 1900, msg)
-						Message.sendAsync(sendOnUdp, True, argTuple, Priority.HIGH)
+					argTuple = (strAddr, nport, msg)
+					Message.sendAsync(sendOnUdp, True, argTuple, Priority.HIGH)
 
 			except:
 				putsExceptMsg()
@@ -1688,6 +1704,7 @@ class ControlPoint (BaseFunc):
 		req += "MAN: \"ssdp:discover\"\r\n"
 		req += "MX: %d\r\n" % MSEARCH_TIMEOUT
 		req += "ST: upnp:rootdevice\r\n"
+#		req += "ST: urn:schemas-upnp-org:device:MediaServer:1\r\n"
 		req += "\r\n"
 
 		sock.sendto(req, (dstAddr, 1900))
@@ -1933,7 +1950,7 @@ def msearch (arg):
 	gMsearchThread = OneShotThread (cp.msearch)
 	gMsearchThread.start()
 
-def sendMsearch (arg=None):
+def sendSsdpMsearch (arg=None):
 	if arg is None:
 		if gMsearchThread is not None and gMsearchThread.isRunning():
 			print "M-SEARCH is running...  cancel."
@@ -2135,6 +2152,36 @@ def sendOnUdp(args):
 	bf = BaseFunc ()
 	bf.sendOnUdp(addr, port, msg)
 
+# workerThreadQue-IF
+# args is tupple. for Message().sendSync()
+def sendOnUdpMulticast (args):
+	addr = args[0]
+	port = args[1]
+	msg = args[2]
+
+	bf = BaseFunc ()
+	bf.sendOnUdpMulticast (addr, port, msg)
+
+def sendSsdpNotify():
+#		notifyType = "upnp:rootdevice"
+		notifyType = "urn:schemas-upnp-org:device:MediaServer:1"
+
+		msg  = "NOTIFY * HTTP/1.1\r\n"
+		msg += "HOST: 239.255.255.250:1900\r\n"
+		msg += "cache-control: max-age=1800\r\n"
+		msg += "Location: http://%s:%d/%s\r\n" % (gIfAddr, DEVICE_HOST_PORT, DEVICE_DISCRIPTION_PATH)
+		msg += "NTS: ssdp:alive\r\n"
+		msg += "Server: \r\n"
+		msg += "NT: %s\r\n" % notifyType
+		msg += "USN: %s::%s\r\n" % (gUdn, notifyType)
+		msg += "\r\n"
+
+		print "----- send -----"
+		print msg
+
+		argTuple = ("239.255.255.250", 1900, msg)
+		Message.sendAsync(sendOnUdpMulticast, True, argTuple, Priority.HIGH)
+
 def checkStringNumber(val, min, max):
 	if not val.isdigit():
 		return False
@@ -2333,6 +2380,7 @@ def getHwAddr(ifname):
 def putsGlobalState():
 	print "--------------------------------"
 	print "interface: [%s (%s -- %s)]" % (gIfName, gIfAddr, gHwAddr)
+	print "UDN: [%s]" % gUdn
 
 	q = gBaseQue.get(Priority.HIGH)
 	qList = q[0]
@@ -2459,6 +2507,14 @@ def checkCommand(cmd):
 			gDeviceHostServerThread.toggle()
 		cashCommand(cmd)
 
+	elif cmd == "n":
+		if gIsEnableDeviceHost:
+			sendSsdpNotify()
+		else:
+			print "must enable pseudo UPnP DeviceHost..."
+			print "--> enter \"ddd\" command."
+		cashCommand(cmd)
+
 	elif cmd == "h":
 		showHelp()
 		cashCommand (cmd)
@@ -2497,15 +2553,15 @@ def checkCommand(cmd):
 			spCmd = cmd.split()
 			if len(spCmd) == 2:
 				try:
-					sendMsearch (spCmd[1]);
+					sendSsdpMsearch (spCmd[1]);
 				except:
 					putsExceptMsg()
 			elif len(spCmd) > 2:
 				print "invalid argument.\nargument is valid only one."
 			else:
-				sendMsearch (None);				
+				sendSsdpMsearch (None);				
 		elif re.search("^sc$", cmd):
-			sendMsearch ();
+			sendSsdpMsearch ();
 
 
 		#------------------------------
@@ -2654,7 +2710,7 @@ def main(ifName):
 		gIfName = ifName
 
 	gHwAddr = getHwAddr(ifName)
-	gUdn = "uuid:xxxxxxxx-xxxx-xxxx-xxxx-" + gHwAddr.replace(":","")
+	gUdn = UDN_PREFIX + gHwAddr.replace(":","")
 
 	#--  set signal handler
 	signal.signal(signal.SIGINT, sigHandler)
@@ -2664,19 +2720,26 @@ def main(ifName):
 	gWorkerThread = WorkerThread()
 	gMRThread = MulticastReceiveThread()
 	gTimerThread = TimerThread()
+	#TODO
 #	gDeviceHostServerThread = DeviceHostServerThread()
 
 	#--  start sub thread
 	gWorkerThread.start()
 	gMRThread.start()
 	gTimerThread.start()
+	#TODO
 #	gDeviceHostServerThread.start()
+
+
 
 	#TODO
 	Handler = SimpleHTTPServer.SimpleHTTPRequestHandler
+	SocketServer.TCPServer.allow_reuse_address = True
 	httpd = SocketServer.TCPServer(("", DEVICE_HOST_PORT), Handler)
 	ost = OneShotThread (httpd.serve_forever)
 	ost.start()
+
+
 
 	print ""
 	print "== UPnP DA checktool (sniffer) =="
@@ -2691,6 +2754,9 @@ def main(ifName):
 #	gWorkerThread.join()
 #	gMRThread.join()
 #	timerThread.join()
+
+	httpd.shutdown()
+	httpd.server_close()
 
 if __name__ == "__main__":
 
