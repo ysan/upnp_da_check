@@ -6,6 +6,7 @@ import sys
 import fcntl
 import re  
 from httplib import HTTPResponse
+from BaseHTTPServer import BaseHTTPRequestHandler
 from StringIO import StringIO
 import re
 from xml.etree import ElementTree
@@ -427,6 +428,17 @@ class HttpResponse(HTTPResponse):
 		self._method = None
 		self.begin()
 
+class HttpRequest(BaseHTTPRequestHandler):
+	def __init__(self, request):
+		self.rfile = StringIO(request)
+		self.raw_requestline = self.rfile.readline()
+		self.error_code = self.error_message = None
+		self.parse_request()
+
+	def send_error(self, code, message):
+		self.error_code = code
+		self.error_message = message
+
 # singleton
 class BaseQue():
 	def __init__(self):
@@ -689,8 +701,8 @@ class BaseFunc():
 
 		return None
 
-	def recvSocket(self, sock):
-		debugPrint("recvSocket")
+	def recvSocketOnTcp(self, sock):
+		debugPrint("recvSocketOnTcp")
 		totalData = ""
 		isContinue = False
 
@@ -905,7 +917,7 @@ class BaseFunc():
 		s.close()
 
 	# return tuple
-	#     tuple[0]: HTTP response body
+	#     tuple[0]: response body
 	#     tuple[1]: HTTP status code
 	def __sendrecvOnTcp(self, addr, port, msg, timeout):
 		try:
@@ -921,7 +933,7 @@ class BaseFunc():
 			crtn = 0
 
 			while True:
-				buff = self.recvSocket(sock)
+				buff = self.recvSocketOnTcp(sock)
 				if buff is None:
 					break
 
@@ -1361,6 +1373,32 @@ class BaseFunc():
 			putsExceptMsg()
 			return serviceStateTableMap
 
+	def getHtmlFromDirPath (self, dirpath):
+
+		if dirpath is None or len(dirpath) == 0:
+			return None
+
+		if not os.path.isdir (dirpath):
+			return None
+
+		files = os.listdir(dirpath)
+		html  =		"<html>\r\n"
+		html +=		"<title>directory</title>\r\n"
+		html +=		"<body>\r\n"
+		html +=		"  <h2>%s</h2>\r\n" % dirpath
+		html +=		"  <hr>\r\n"
+		html +=		"  <ul type=\"circle\">\r\n"
+		html +=		"  <SUB>\r\n"
+		for file in files:
+			html +=	"    <li><a href=\"%s\">%s</a>\r\n" % (dirpath + "/" + file, file)
+		html +=		"  </SUB>\r\n"
+		html +=		"  </ul>\r\n"
+		html +=		"  <hr>\r\n"
+		html +=		"</body>\r\n"
+		html +=		"</html>\r\n"
+
+		return html
+
 class MulticastReceiveThread(threading.Thread, BaseFunc):
 	def __init__(self):
 		super(MulticastReceiveThread, self).__init__()
@@ -1388,7 +1426,7 @@ class MulticastReceiveThread(threading.Thread, BaseFunc):
 				strAddr = addr[0]
 				nport = addr[1]
 
-				if re.match("NOTIFY +\* +HTTP/1.1", buff, re.IGNORECASE):
+				if re.search("^.*NOTIFY +\* +HTTP/1.1", buff, re.IGNORECASE):
 					#=========== SSDP NOTIFY ===========#
 
 					loc = self.getHeader(buff, "Location")
@@ -1448,7 +1486,7 @@ class MulticastReceiveThread(threading.Thread, BaseFunc):
 						gLockDeviceInfoMap.release()
 
 
-				elif re.match("M-SEARCH +\* +HTTP/1.1", buff, re.IGNORECASE):
+				elif re.search("^.*M-SEARCH +\* +HTTP/1.1", buff, re.IGNORECASE):
 					#=========== SSDP M-SEARCH ===========#
 
 					if not gIsEnableDeviceHost:
@@ -1600,6 +1638,19 @@ class TimerThread(threading.Thread):
 	def isEnable(self):
 		return self.__isEnable
 
+class StaticHtmlParts():
+	def __init__(self, code, title, desc):
+		self.code = code
+		self.title = title
+		self.desc = desc
+
+gStaticHtmlMap = {\
+	200 : StaticHtmlParts (200, "OK"             , ""),\
+	400 : StaticHtmlParts (400, "Bad Request"    , "The request was bad."),\
+	404 : StaticHtmlParts (404, "Not Found"      , "The requested URL was not found on this server."),\
+	501 : StaticHtmlParts (501, "Not Implemented", "The request was not implemented on this server."),\
+}
+
 class DeviceHostServerThread(threading.Thread, BaseFunc):
 	def __init__(self):
 		super(DeviceHostServerThread, self).__init__()
@@ -1626,26 +1677,52 @@ class DeviceHostServerThread(threading.Thread, BaseFunc):
 					serverAddr = ("", DEVICE_HOST_PORT) # server address = "" --> INADDR_ANY
 					sock.bind(serverAddr)
 					#TODO
-					sock.listen(20)
+					sock.listen(5)
 
 				conn, addr = sock.accept()
+				conn.settimeout(3) # client socket timeout
 
-				buff = self.recvSocket (conn)
+				print "client %s" % str(addr[0])
+				debugPrint ("client %s" % str(addr[0]))
+
+				buff = self.recvSocketOnTcp (conn)
 				if buff is None:
+					conn.close()
 					continue
 
 				print buff
-				conn.send(buff)
+				debugPrint(buff)
 
+				req = HttpRequest (buff)
+				resParts = self.__checkRequest (req)
+				resMsg = self.__createResponseMsg (resParts[0], resParts[1], resParts[2])
+
+				print resMsg
+				debugPrint (resMsg)
+
+				# access log
+				resTitle = ""
+				if gStaticHtmlMap.has_key (resParts[0]) is not None:
+					resTitle = gStaticHtmlMap[resParts[0]].title
+				print "client:%s [%s %s %s] --> %d %s" %\
+								(str(addr[0]), req.command, req.path, req.request_version, resParts[0], resTitle)
+
+				conn.send (resMsg)
+
+
+				#TODO  not support keep-alive
+				# force close
 				conn.close()
 
 			except socket.timeout:
 				print "accept timeout"
+				debugPrint("accept timeout")
 				continue
 
 			except:
-				putsExceptMsg()
-				break
+#				putsExceptMsg()
+				print "catch exception: %s" % str(sys.exc_info())
+				continue
 
 	def toggle(self):
 		if self.__isEnable:
@@ -1661,8 +1738,123 @@ class DeviceHostServerThread(threading.Thread, BaseFunc):
 	def isEnable(self):
 		return self.__isEnable
 
-	def __getHttpPath (self, method, content):
-		print "TODO"
+	# return
+	#     tuple[0]: HTTP status code
+	#     tuple[1]: response body
+	#     tuple[2]: content type
+	def __checkRequest (self, req):
+		if req is None:
+			return None
+
+		code = 200
+		resBody = ""
+		conType = ""
+
+		if req.error_code is None:
+			path = "./" + req.path
+
+			if req.command == "GET" or req.command == "HEAD":
+				if os.path.isdir (path):
+					# directory
+					html = self.getHtmlFromDirPath (path)
+					if html is not None:
+						code = 200
+						resBody = html
+						conType = "text/html; charset=utf-8"
+					else:
+						code = 404
+						resBody = self.__createErrHtml (code)
+						conType = "text/html; charset=utf-8"
+
+				else:
+					if os.path.exists (path):
+						# file
+
+						#TODO File type judge
+						root, ext = os.path.splitext (path)
+						tmpext = re.sub ("^\.", "", ext)
+						if tmpext == "xml":
+							conType = "text/xml; charset=utf-8"
+						else:
+							#TODO
+							conType = "text/plane; charset=utf-8"
+
+						f = open (path, 'r')
+						file = ""
+						for row in f:
+							file += row
+
+						code = 200
+						resBody = file
+
+					else:
+						code = 404
+						resBody = self.__createErrHtml (code)
+						conType = "text/html; charset=utf-8"
+
+			else:
+				print "unsupport method:%s" % req.command
+
+				code = 501
+				resBody = self.__createErrHtml (code)
+				conType = "text/html; charset=utf-8"
+
+		else:
+			print req.error_message
+
+			code = 400
+			resBody = self.__createErrHtml (code)
+			conType = "text/html; charset=utf-8"
+
+
+		if req.command == "HEAD":
+			resBody = ""
+
+		return (code, resBody, conType)
+
+	def __createResponseMsg (self, code, resBody, conType):
+		if code is None or code == 0 or\
+			resBody is None or len (resBody) == 0 or\
+			conType is None or len (conType) == 0 :
+			return None
+
+		if gStaticHtmlMap.has_key (code) is None:
+			return None
+
+		#TODO
+		HTTP_VER = "HTTP/1.1"
+		#TODO
+		connection = "close"
+
+		resMsg = ""
+		resMsg += "%s %d %s\r\n" % (HTTP_VER, code, gStaticHtmlMap[code].title)
+		resMsg += "Content-Type: %s\r\n" % conType
+		resMsg += "Connection: %s\r\n" % connection
+
+		if (resBody is not None) and (len (resBody) != 0):
+			resMsg += "Content-Length: %d\r\n" % len (resBody)
+			resMsg += "\r\n"
+			resMsg += resBody
+
+		return resMsg
+
+	def __createErrHtml (self, code):
+		if code is None or code == 0 :
+			return None
+
+		if gStaticHtmlMap.has_key (code) is None:
+			return None
+
+		html  = "<HTML>\r\n"
+		html += "  <HEAD>\r\n"
+		html += "    <TITLE>%d %s</TITLE>\r\n" % (code, gStaticHtmlMap[code].title)
+		html += "  </HEAD>\r\n"
+		html += "  <BODY>\r\n"
+		html += "    <H1>%s</H1>%s\r\n" % (gStaticHtmlMap[code].title, gStaticHtmlMap[code].desc)
+		html += "  </BODY>\r\n"
+		html += "</HTML>\r\n"
+
+		return html
 
 class ControlPoint (BaseFunc):
 	def __init__(self, arg0=None, arg1=None, arg2=None, arg3=None):
@@ -1715,7 +1907,7 @@ class ControlPoint (BaseFunc):
 				buff, addr = sock.recvfrom(4096)
 #				debugPrint(addr)
 #				debugPrint(buff)
-				strAddr = addr[0]
+				strAddr = str(addr[0])
 
 				res = HttpResponse(buff)
 				if res is not None:
@@ -1894,7 +2086,7 @@ class ControlPoint (BaseFunc):
 	# return tuple
 	#     tuple[0]: resArgList
 	#     tuple[1]: HTTP status code
-	#     tuple[2]: HTTP response body
+	#     tuple[2]: response body
 	def action (self):
 		if self.__arg0 is None or\
 			self.__arg1 is None or\
@@ -1982,7 +2174,7 @@ def sendSsdpMsearch (arg=None):
 # return tuple
 #     tuple[0]: resArgList
 #     tuple[1]: HTTP status code
-#     tuple[2]: HTTP response body
+#     tuple[2]: response body
 def actionInnerWrapper(args):
 	deviceInfo = args[0]
 	serviceInfo = args[1]
@@ -2335,7 +2527,7 @@ def downloadAtHttp (url):
 	if len (response[1]) == 0:
 		print "can not download...  maybe GET request is abnormal."
 	else:
-		if re.match("200 OK", response[1], re.IGNORECASE):
+		if re.match("200 +OK", response[1], re.IGNORECASE):
 			print "downloaded  (status=%s) (%d bytes)" % (response[1], len(response[0]))
 
 			if os.path.exists (dlFullPath):
@@ -2720,24 +2912,22 @@ def main(ifName):
 	gWorkerThread = WorkerThread()
 	gMRThread = MulticastReceiveThread()
 	gTimerThread = TimerThread()
-	#TODO
-#	gDeviceHostServerThread = DeviceHostServerThread()
+	gDeviceHostServerThread = DeviceHostServerThread()
 
 	#--  start sub thread
 	gWorkerThread.start()
 	gMRThread.start()
 	gTimerThread.start()
-	#TODO
-#	gDeviceHostServerThread.start()
+	gDeviceHostServerThread.start()
 
 
 
 	#TODO
-	Handler = SimpleHTTPServer.SimpleHTTPRequestHandler
-	SocketServer.TCPServer.allow_reuse_address = True
-	httpd = SocketServer.TCPServer(("", DEVICE_HOST_PORT), Handler)
-	ost = OneShotThread (httpd.serve_forever)
-	ost.start()
+#	Handler = SimpleHTTPServer.SimpleHTTPRequestHandler
+#	SocketServer.TCPServer.allow_reuse_address = True
+#	httpd = SocketServer.TCPServer(("", DEVICE_HOST_PORT), Handler)
+#	ost = OneShotThread (httpd.serve_forever)
+#	ost.start()
 
 
 
@@ -2755,8 +2945,8 @@ def main(ifName):
 #	gMRThread.join()
 #	timerThread.join()
 
-	httpd.shutdown()
-	httpd.server_close()
+#	httpd.shutdown()
+#	httpd.server_close()
 
 if __name__ == "__main__":
 
