@@ -60,7 +60,7 @@ MSEARCH_TIMEOUT = 5
 
 UDN_PREFIX = "uuid:ffffffff-ffff-ffff-ffff-"
 DEVICE_HOST_PORT = 50000
-DEVICE_DISCRIPTION_PATH = "ssdp/device-desc.xml"
+DEVICE_DISCRIPTION_PATH = "/ssdp/device-desc.xml"
 
 gDeviceInfoMap = {}
 gCmdList = []
@@ -72,6 +72,7 @@ gHwAddr = ""
 gUdn = ""
 gIsCatchSigInt = False
 gIsDebugPrint = False
+gIsDebugPrintSub = False
 gBaseQue = None
 gWorkerThread = None
 gMRThread = None
@@ -1373,40 +1374,17 @@ class BaseFunc():
 			putsExceptMsg()
 			return serviceStateTableMap
 
-	def getHtmlFromDirPath (self, dirpath):
-
-		if dirpath is None or len(dirpath) == 0:
-			return None
-
-		if not os.path.isdir (dirpath):
-			return None
-
-		files = os.listdir(dirpath)
-		html  =		"<html>\r\n"
-		html +=		"<title>directory</title>\r\n"
-		html +=		"<body>\r\n"
-		html +=		"  <h2>%s</h2>\r\n" % dirpath
-		html +=		"  <hr>\r\n"
-		html +=		"  <ul type=\"circle\">\r\n"
-		html +=		"  <SUB>\r\n"
-		for file in files:
-			html +=	"    <li><a href=\"%s\">%s</a>\r\n" % (dirpath + "/" + file, file)
-		html +=		"  </SUB>\r\n"
-		html +=		"  </ul>\r\n"
-		html +=		"  <hr>\r\n"
-		html +=		"</body>\r\n"
-		html +=		"</html>\r\n"
-
-		return html
-
 class MulticastReceiveThread(threading.Thread, BaseFunc):
 	def __init__(self):
 		super(MulticastReceiveThread, self).__init__()
 		self.daemon = True
 		self.__cond = Condition()
 		self.__isEnable = True
+		self.__id = 0
 
 	def run(self):
+		self.__id = threading.current_thread().ident
+
 		sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 		serverAddr = ("239.255.255.250", 1900) # server address = "" --> INADDR_ANY
 		sock.bind(serverAddr)
@@ -1517,20 +1495,6 @@ class MulticastReceiveThread(threading.Thread, BaseFunc):
 
 		sock.close()
 
-	def toggle(self):
-		if self.__isEnable:
-			self.__isEnable = False
-			print "[UPnP multicast receive stop]"
-		else:
-			self.__isEnable = True
-			self.__cond.acquire()
-			self.__cond.notify()
-			self.__cond.release()
-			print "[UPnP multicast receive start]"
-
-	def isEnable(self):
-		return self.__isEnable
-
 	def __checkAlreadyQueuing(self, keyUsn):
 		isFound = False
 		# Priority.LOW is multicast receive
@@ -1545,14 +1509,34 @@ class MulticastReceiveThread(threading.Thread, BaseFunc):
 		qCond.release()
 		return isFound
 
+	def toggle(self):
+		if self.__isEnable:
+			self.__isEnable = False
+			print "[UPnP multicast receive stop]"
+		else:
+			self.__isEnable = True
+			self.__cond.acquire()
+			self.__cond.notify()
+			self.__cond.release()
+			print "[UPnP multicast receive start]"
+
+	def isEnable(self):
+		return self.__isEnable
+
+	def getId (self):
+		return self.__id
+
 class TimerThread(threading.Thread):
 	def __init__(self):
 		super(TimerThread, self).__init__()
 		self.daemon = True
 		self.__cond = Condition()
 		self.__isEnable = True
+		self.__id = 0
 
 	def run(self):
+		self.__id = threading.current_thread().ident
+
 		while True:
 			if not self.__isEnable:
 				self.__cond.acquire()
@@ -1638,6 +1622,9 @@ class TimerThread(threading.Thread):
 	def isEnable(self):
 		return self.__isEnable
 
+	def getId (self):
+		return self.__id
+
 class StaticHtmlParts():
 	def __init__(self, code, title, desc):
 		self.code = code
@@ -1657,10 +1644,12 @@ class DeviceHostServerThread(threading.Thread, BaseFunc):
 		self.daemon = True
 		self.__cond = Condition()
 		self.__isEnable = False
+		self.__id = 0
 
 	def run(self):
-		sock = None
+		self.__id = threading.current_thread().ident
 
+		sock = None
 		while True:
 			try:
 				if not self.__isEnable:
@@ -1682,7 +1671,6 @@ class DeviceHostServerThread(threading.Thread, BaseFunc):
 				conn, addr = sock.accept()
 				conn.settimeout(3) # client socket timeout
 
-				print "client %s" % str(addr[0])
 				debugPrint ("client %s" % str(addr[0]))
 
 				buff = self.recvSocketOnTcp (conn)
@@ -1690,14 +1678,12 @@ class DeviceHostServerThread(threading.Thread, BaseFunc):
 					conn.close()
 					continue
 
-				print buff
 				debugPrint(buff)
 
 				req = HttpRequest (buff)
 				resParts = self.__checkRequest (req)
 				resMsg = self.__createResponseMsg (resParts[0], resParts[1], resParts[2])
 
-				print resMsg
 				debugPrint (resMsg)
 
 				# access log
@@ -1715,28 +1701,12 @@ class DeviceHostServerThread(threading.Thread, BaseFunc):
 				conn.close()
 
 			except socket.timeout:
-				print "accept timeout"
 				debugPrint("accept timeout")
 				continue
 
 			except:
-#				putsExceptMsg()
-				print "catch exception: %s" % str(sys.exc_info())
+				putsExceptMsg()
 				continue
-
-	def toggle(self):
-		if self.__isEnable:
-			self.__isEnable = False
-			print "[pseudo DeviceHost server disable]"
-		else:
-			self.__isEnable = True
-			self.__cond.acquire()
-			self.__cond.notify()
-			self.__cond.release()
-			print "[pseudo DeviceHost server enable]"
-
-	def isEnable(self):
-		return self.__isEnable
 
 	# return
 	#     tuple[0]: HTTP status code
@@ -1751,12 +1721,12 @@ class DeviceHostServerThread(threading.Thread, BaseFunc):
 		conType = ""
 
 		if req.error_code is None:
-			path = "./" + req.path
+			path = "." + req.path
 
 			if req.command == "GET" or req.command == "HEAD":
 				if os.path.isdir (path):
 					# directory
-					html = self.getHtmlFromDirPath (path)
+					html = self.__createHtmlFromDirPath (path)
 					if html is not None:
 						code = 200
 						resBody = html
@@ -1793,14 +1763,14 @@ class DeviceHostServerThread(threading.Thread, BaseFunc):
 						conType = "text/html; charset=utf-8"
 
 			else:
-				print "unsupport method:%s" % req.command
+				debugPrint ("unsupport method:%s" % req.command)
 
 				code = 501
 				resBody = self.__createErrHtml (code)
 				conType = "text/html; charset=utf-8"
 
 		else:
-			print req.error_message
+			debugPrint ("req.error_message -- %s" % req.error_message)
 
 			code = 400
 			resBody = self.__createErrHtml (code)
@@ -1838,6 +1808,42 @@ class DeviceHostServerThread(threading.Thread, BaseFunc):
 
 		return resMsg
 
+	def __createHtmlFromDirPath (self, dirpath):
+
+		if dirpath is None or len(dirpath) == 0:
+			return None
+
+		if not os.path.isdir (dirpath):
+			return None
+
+		if re.search (".+/$", dirpath) :
+			comppath = dirpath
+		else:
+			comppath = dirpath + "/"
+		tmpcomppath = re.sub ("^\.", "", comppath)
+
+		html  =			"<html>\r\n"
+		html +=			"<title>directory</title>\r\n"
+		html +=			"<body>\r\n"
+		html +=			"  <h2>%s</h2>\r\n" % tmpcomppath
+		html +=			"  <hr>\r\n"
+		html +=			"  <ul type=\"circle\">\r\n"
+		html +=			"  <SUB>\r\n"
+
+		files = os.listdir(dirpath)
+		if len(files) > 0:
+			for file in files:
+				html +=	"    <li><a href=\"%s\">%s</a>\r\n" % (tmpcomppath + file, file)
+		else:
+				html +=	"    no files or directories...\r\n"
+		html +=			"  </SUB>\r\n"
+		html +=			"  </ul>\r\n"
+		html +=			"  <hr>\r\n"
+		html +=			"</body>\r\n"
+		html +=			"</html>\r\n"
+
+		return html
+
 	def __createErrHtml (self, code):
 		if code is None or code == 0 :
 			return None
@@ -1855,6 +1861,23 @@ class DeviceHostServerThread(threading.Thread, BaseFunc):
 		html += "</HTML>\r\n"
 
 		return html
+
+	def toggle(self):
+		if self.__isEnable:
+			self.__isEnable = False
+			print "[pseudo DeviceHost server disable]"
+		else:
+			self.__isEnable = True
+			self.__cond.acquire()
+			self.__cond.notify()
+			self.__cond.release()
+			print "[pseudo DeviceHost server enable]"
+
+	def isEnable(self):
+		return self.__isEnable
+
+	def getId (self):
+		return self.__id
 
 class ControlPoint (BaseFunc):
 	def __init__(self, arg0=None, arg1=None, arg2=None, arg3=None):
@@ -2617,6 +2640,11 @@ def putsGlobalState():
 	else:
 		print "debug print: [off]"
 
+	if gIsDebugPrintSub:
+		print "debug print sub: [on]"
+	else:
+		print "debug print sub: [off]"
+
 	print "--------------------------------"
 
 def showHistory():
@@ -2644,6 +2672,7 @@ def showHelp():
 	print "  c                              - show command hitory"
 	print "  h                              - show command referense"
 	print "  d                              - debug log (toggle on/off(def))"
+	print "  ds                             - debug log sub (toggle on/off(def))"
 	print "  q                              - exit from console"
 
 def cashCommand(cmd):
@@ -2656,6 +2685,7 @@ def cashCommand(cmd):
 
 def checkCommand(cmd):
 	global gIsDebugPrint
+	global gIsDebugPrintSub
 	global gIsEnableDeviceHost
 
 	if cmd is None:
@@ -2686,6 +2716,15 @@ def checkCommand(cmd):
 		else:
 			gIsDebugPrint = True
 			print "[debug print on]"
+		cashCommand(cmd)
+
+	elif cmd == "ds":
+		if gIsDebugPrintSub:
+			gIsDebugPrintSub = False
+			print "[debug print sub off]"
+		else:
+			gIsDebugPrintSub = True
+			print "[debug print sub on]"
 		cashCommand(cmd)
 
 	elif cmd == "ddd":
@@ -2734,8 +2773,6 @@ def checkCommand(cmd):
 					putsExceptMsg()
 			elif len(spCmd) > 2:
 				print "invalid argument.\nargument is valid only one."
-			else:
-				print "Please set argument."
 		elif re.search("^an$", cmd):
 			print "Please set argument."
 
@@ -2750,8 +2787,6 @@ def checkCommand(cmd):
 					putsExceptMsg()
 			elif len(spCmd) > 2:
 				print "invalid argument.\nargument is valid only one."
-			else:
-				sendSsdpMsearch (None);				
 		elif re.search("^sc$", cmd):
 			sendSsdpMsearch ();
 
@@ -2766,8 +2801,6 @@ def checkCommand(cmd):
 					putsExceptMsg()
 			elif len(spCmd) > 2:
 				print "invalid argument.\nargument is valid only one."
-			else:
-				print "Please set argument."
 		elif re.search("^info$", cmd):
 			print "Please set argument."
 
@@ -2782,8 +2815,6 @@ def checkCommand(cmd):
 					putsExceptMsg()
 			elif len(spCmd) > 2:
 				print "invalid argument.\nargument is valid only one."
-			else:
-				print "Please set argument."
 		elif re.search("^ls$", cmd):
 			listDevice ()
 
@@ -2798,8 +2829,6 @@ def checkCommand(cmd):
 					putsExceptMsg()
 			elif len(spCmd) > 2:
 				print "invalid argument.\nargument is valid only one."
-			else:
-				print "Please set argument."
 		elif re.search("^act$", cmd):
 			print "Please set argument."
 
@@ -2814,8 +2843,6 @@ def checkCommand(cmd):
 					putsExceptMsg()
 			elif len(spCmd) > 2:
 				print "invalid argument.\nargument is valid only one."
-			else:
-				print "Please set argument."
 		elif re.search("^sd$", cmd):
 			print "Please set argument."
 
@@ -2847,7 +2874,12 @@ def putsExceptMsg():
 
 def debugPrint(msg):
 	if not gIsDebugPrint:
-		return
+		if not gIsDebugPrintSub:
+			return
+		else:
+			# gIsDebugPrintSub
+			if threading.current_thread().ident != gDeviceHostServerThread.getId():
+				return
 
 	d = datetime.datetime.now()
 
