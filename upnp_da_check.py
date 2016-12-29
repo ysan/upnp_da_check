@@ -720,7 +720,7 @@ class BaseFunc():
 			debugPrint("sock.recv size " + str(len(data)))
 			totalData += data
 
-			# timeout 50mS
+			# select timeout 50mS
 			readfds = set([sock])
 			rList, wList, xList = select.select(readfds, [], [], 0.05)
 			for r in iter(rList):
@@ -1626,16 +1626,23 @@ class TimerThread(threading.Thread):
 		return self.__id
 
 class StaticHtmlParts():
-	def __init__(self, code, title, desc):
+	def __init__(self, code, msg, desc):
 		self.code = code
-		self.title = title
+		self.msg = msg
 		self.desc = desc
 
 gStaticHtmlMap = {\
-	200 : StaticHtmlParts (200, "OK"             , ""),\
-	400 : StaticHtmlParts (400, "Bad Request"    , "The request was bad."),\
-	404 : StaticHtmlParts (404, "Not Found"      , "The requested URL was not found on this server."),\
-	501 : StaticHtmlParts (501, "Not Implemented", "The request was not implemented on this server."),\
+	200 : StaticHtmlParts (200, "OK"                   , ""),\
+	400 : StaticHtmlParts (400, "Bad Request"          , "The request was bad."),\
+	404 : StaticHtmlParts (404, "Not Found"            , "The requested URL was not found on this server.  orz"),\
+	500 : StaticHtmlParts (500, "Internal Server Error", "The server encountered an internal error or misocnfiguration and was unable to complete your request."),\
+	501 : StaticHtmlParts (501, "Not Implemented"      , "The request was not implemented on this server."),\
+}
+
+gContentTypeMap = {\
+	"defalut" : "text/plane; charset=utf-8",\
+	"html"    : "text/html; charset=utf-8",\
+	"xml"     : "text/xml; charset=utf-8",\
 }
 
 class DeviceHostServerThread(threading.Thread, BaseFunc):
@@ -1669,14 +1676,19 @@ class DeviceHostServerThread(threading.Thread, BaseFunc):
 					sock.listen(5)
 
 				conn, addr = sock.accept()
-				conn.settimeout(3) # client socket timeout
 
 				debugPrint ("client %s" % str(addr[0]))
 
-				buff = self.recvSocketOnTcp (conn)
-				if buff is None:
-					conn.close()
-					continue
+				try:
+					conn.settimeout(3) # client socket timeout
+					buff = self.recvSocketOnTcp (conn)
+					if buff is None:
+						conn.close()
+						continue
+				except socket.timeout:
+						debugPrint("client socket timeout")
+						conn.close()
+						continue
 
 				debugPrint(buff)
 
@@ -1687,11 +1699,16 @@ class DeviceHostServerThread(threading.Thread, BaseFunc):
 				debugPrint (resMsg)
 
 				# access log
-				resTitle = ""
-				if gStaticHtmlMap.has_key (resParts[0]) is not None:
-					resTitle = gStaticHtmlMap[resParts[0]].title
-				print "client:%s [%s %s %s] --> %d %s" %\
-								(str(addr[0]), req.command, req.path, req.request_version, resParts[0], resTitle)
+				resStatusCode = resParts[0]
+				resStatusMsg = ""
+				if gStaticHtmlMap.has_key (resParts[0]) :
+					resStatusMsg = gStaticHtmlMap[resParts[0]].msg
+				if req.error_code is None:
+					print "client:%s [%s %s %s] --> %d %s" %\
+									(str(addr[0]), req.command, req.path, req.request_version, resStatusCode, resStatusMsg)
+				else :
+					print "client:%s !!!! invalid HTTP request !!!!" % str(addr[0])
+
 
 				conn.send (resMsg)
 
@@ -1730,24 +1747,15 @@ class DeviceHostServerThread(threading.Thread, BaseFunc):
 					if html is not None:
 						code = 200
 						resBody = html
-						conType = "text/html; charset=utf-8"
+						conType = self.__getContentType ("html")
 					else:
 						code = 404
 						resBody = self.__createErrHtml (code)
-						conType = "text/html; charset=utf-8"
+						conType = self.__getContentType ("html")
 
 				else:
 					if os.path.exists (path):
 						# file
-
-						#TODO File type judge
-						root, ext = os.path.splitext (path)
-						tmpext = re.sub ("^\.", "", ext)
-						if tmpext == "xml":
-							conType = "text/xml; charset=utf-8"
-						else:
-							#TODO
-							conType = "text/plane; charset=utf-8"
 
 						f = open (path, 'r')
 						file = ""
@@ -1757,24 +1765,29 @@ class DeviceHostServerThread(threading.Thread, BaseFunc):
 						code = 200
 						resBody = file
 
+						#TODO File type judge
+						root, ext = os.path.splitext (path)
+						tmpext = re.sub ("^\.", "", ext)
+						conType = self.__getContentType (tmpext)
+
 					else:
 						code = 404
 						resBody = self.__createErrHtml (code)
-						conType = "text/html; charset=utf-8"
+						conType = self.__getContentType ("html")
 
 			else:
 				debugPrint ("unsupport method:%s" % req.command)
 
 				code = 501
 				resBody = self.__createErrHtml (code)
-				conType = "text/html; charset=utf-8"
+				conType = self.__getContentType ("html")
 
 		else:
 			debugPrint ("req.error_message -- %s" % req.error_message)
 
 			code = 400
 			resBody = self.__createErrHtml (code)
-			conType = "text/html; charset=utf-8"
+			conType = self.__getContentType ("html")
 
 
 		if req.command == "HEAD":
@@ -1782,13 +1795,22 @@ class DeviceHostServerThread(threading.Thread, BaseFunc):
 
 		return (code, resBody, conType)
 
+	def __getContentType (self, fileKind):
+		if (fileKind is None) or (len (fileKind)) == 0:
+			return gContentTypeMap["defalut"]
+
+		if not gContentTypeMap.has_key (fileKind) :
+			return gContentTypeMap["defalut"]
+		else :
+			return gContentTypeMap[fileKind]
+
 	def __createResponseMsg (self, code, resBody, conType):
 		if code is None or code == 0 or\
 			resBody is None or len (resBody) == 0 or\
 			conType is None or len (conType) == 0 :
 			return None
 
-		if gStaticHtmlMap.has_key (code) is None:
+		if not gStaticHtmlMap.has_key (code) :
 			return None
 
 		#TODO
@@ -1797,7 +1819,7 @@ class DeviceHostServerThread(threading.Thread, BaseFunc):
 		connection = "close"
 
 		resMsg = ""
-		resMsg += "%s %d %s\r\n" % (HTTP_VER, code, gStaticHtmlMap[code].title)
+		resMsg += "%s %d %s\r\n" % (HTTP_VER, code, gStaticHtmlMap[code].msg)
 		resMsg += "Content-Type: %s\r\n" % conType
 		resMsg += "Connection: %s\r\n" % connection
 
@@ -1848,15 +1870,15 @@ class DeviceHostServerThread(threading.Thread, BaseFunc):
 		if code is None or code == 0 :
 			return None
 
-		if gStaticHtmlMap.has_key (code) is None:
+		if not gStaticHtmlMap.has_key (code) :
 			return None
 
 		html  = "<HTML>\r\n"
 		html += "  <HEAD>\r\n"
-		html += "    <TITLE>%d %s</TITLE>\r\n" % (code, gStaticHtmlMap[code].title)
+		html += "    <TITLE>%d %s</TITLE>\r\n" % (code, gStaticHtmlMap[code].msg)
 		html += "  </HEAD>\r\n"
 		html += "  <BODY>\r\n"
-		html += "    <H1>%s</H1>%s\r\n" % (gStaticHtmlMap[code].title, gStaticHtmlMap[code].desc)
+		html += "    <H1>%s</H1>%s\r\n" % (gStaticHtmlMap[code].msg, gStaticHtmlMap[code].desc)
 		html += "  </BODY>\r\n"
 		html += "</HTML>\r\n"
 
@@ -2665,14 +2687,14 @@ def showHelp():
 	print "  act  UDN                       - send action to device"
 	print "  r                              - join UPnP multicast group (toggle on(def)/off)"
 	print "  t                              - cache-control(max-age) (toggle enable(def)/disable)"
-	print "  ddd                            - pseudo UPnP DeviceHost (toggle enable/disable(def))"
 	print "  sc  [ipaddr]                   - send SSDP M-SEARCH"
 	print "  sd  http-url                   - simple HTTP downloader"
 	print "  ss                             - show status"
 	print "  c                              - show command hitory"
 	print "  h                              - show command referense"
 	print "  d                              - debug log (toggle on/off(def))"
-	print "  ds                             - debug log sub (toggle on/off(def))"
+	print "  dd                             - debug log sub (toggle on/off(def))"
+	print "  ddd                            - pseudo UPnP DeviceHost (toggle enable/disable(def))"
 	print "  q                              - exit from console"
 
 def cashCommand(cmd):
@@ -2718,7 +2740,7 @@ def checkCommand(cmd):
 			print "[debug print on]"
 		cashCommand(cmd)
 
-	elif cmd == "ds":
+	elif cmd == "dd":
 		if gIsDebugPrintSub:
 			gIsDebugPrintSub = False
 			print "[debug print sub off]"
@@ -2883,22 +2905,17 @@ def debugPrint(msg):
 
 	d = datetime.datetime.now()
 
-	kind = 0
+	isLFin = False
 	term = ""
-	if re.search("\r\n", msg):
-		kind = 1
-		term = "\r\n"
-	elif re.search("\n", msg):
-		kind = 1
-		term = "\n"
+	if re.search("\n", msg):
+		isLFin = True
 
-
-	if kind == 0:
+	if not isLFin :
 		compMsg = "[%s.%03d](%s(),%d) " % (d.strftime("%Y-%m-%d %H:%M:%S"), d.microsecond/1000, inspect.stack()[1][3], inspect.stack()[1][2])
 		compMsg += msg
 		print compMsg
 	else:
-		spMsg = msg.split(term)
+		spMsg = re.split("\r\n|\n", msg)
 		for i in spMsg:
 			compMsg = "[%s.%03d](%s(),%d) " % (d.strftime("%Y-%m-%d %H:%M:%S"), d.microsecond/1000, inspect.stack()[1][3], inspect.stack()[1][2])
 			compMsg += i
