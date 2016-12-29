@@ -440,6 +440,17 @@ class HttpRequest(BaseHTTPRequestHandler):
 		self.error_code = code
 		self.error_message = message
 
+	def getheader (self, reqheader):
+		if reqheader is None or len(reqheader) == 0:
+			return None
+
+		for it in self.headers.iterkeys() :
+			pattern = "^" + reqheader + "$"
+			if re.search (pattern, str(it), re.IGNORECASE):
+				return self.headers[str(it)]
+
+		return None
+
 # singleton
 class BaseQue():
 	def __init__(self):
