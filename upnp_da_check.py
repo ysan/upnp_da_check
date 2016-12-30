@@ -617,66 +617,6 @@ class Message():
 #		msg = MessageObject (self.__cbFunc, self.__isNeedArg, self.__arg, None, False, self.__priority, "by_msearch")
 #		gBaseQue.enQue(msg)
 
-class OneShotThread (threading.Thread):
-	def __init__(self, arg):
-		super(OneShotThread, self).__init__()
-		self.daemon = True
-		self.__cbFunc = arg
-		self.__isRunning = False
-
-	def run(self):
-		if self.__cbFunc is not None:
-			self.__isRunning = True
-			self.__cbFunc ()
-			self.__isRunning = False
-
-	def isRunning (self):
-		return self.__isRunning
-
-class WorkerThread (threading.Thread):
-	def __init__(self):
-		super(WorkerThread, self).__init__()
-		self.daemon = True
-		self.__nowExecQue = None
-
-	def run(self):
-		while True:
-			rtnVal = None
-
-			# que is MessageObject()
-			que = gBaseQue.deQue()
-			if que is None:
-				gBaseQue.waitQue()
-			else:
-				if not que.isEnable:
-					debugPrint("this queue is ignore")
-					continue
-
-				self.__nowExecQue = que
-
-				debugPrint("worker thread exec")
-
-				if que.isNeedRtnVal:
-					if que.isNeedArg:
-						rtnVal = que.cbFunc(que.arg)
-					else:
-						rtnVal = que.cbFunc()
-				else:
-					if que.isNeedArg:
-						que.cbFunc(que.arg)
-					else:
-						que.cbFunc()
-
-				if que.replyObj is not None:
-					# que.replyObj is UniqQue()
-					que.replyObj.reply(rtnVal)
-
-				self.__nowExecQue = None
-
-	# reference only
-	def getNowExecQue(self):
-		return copy.deepcopy(self.__nowExecQue)
-
 class BaseFunc():
 	def getHeader(self, content, pattern):
 		if content is None or content == "" or\
@@ -1385,16 +1325,125 @@ class BaseFunc():
 			putsExceptMsg()
 			return serviceStateTableMap
 
-class MulticastReceiveThread(threading.Thread, BaseFunc):
-	def __init__(self):
-		super(MulticastReceiveThread, self).__init__()
+class BaseThread (threading.Thread):
+	def __init__ (self, isEnable = True):
+		super (BaseThread, self).__init__()
 		self.daemon = True
 		self.__cond = Condition()
-		self.__isEnable = True
+		self.__isEnable = isEnable
 		self.__id = 0
 
-	def run(self):
+	def run (self):
 		self.__id = threading.current_thread().ident
+
+		self.onExecMain ()
+
+	# virtual
+	def onExecMain (self):
+		return
+
+	# virtual
+	def onDisable (self):
+		return
+
+	# virtual
+	def onEnable (self):
+		return
+
+	def toggle (self):
+		if self.__isEnable:
+			self.__isEnable = False
+			print "[%s disable]" % self.__class__.__name__
+		else:
+			self.__isEnable = True
+			self.__cond.acquire()
+			self.__cond.notify()
+			self.__cond.release()
+			print "[%s enable]" % self.__class__.__name__
+
+	def checkWait (self):
+		if not self.__isEnable:
+
+			self.onDisable()
+
+			self.__cond.acquire()
+			self.__cond.wait()
+			self.__cond.release()
+
+			self.onEnable()
+
+	def isEnable (self):
+		return self.__isEnable
+
+	def getId (self):
+		return self.__id
+
+	def getCondition (self):
+		return self.__cond
+
+class OneShotThread (BaseThread):
+	def __init__(self, cbFunc):
+		super (OneShotThread, self).__init__()
+		self.__cbFunc = cbFunc
+		self.__isRunning = False
+
+	def onExecMain (self):
+		if self.__cbFunc is not None:
+			self.__isRunning = True
+			self.__cbFunc ()
+			self.__isRunning = False
+
+	def isRunning (self):
+		return self.__isRunning
+
+class WorkerThread (BaseThread):
+	def __init__ (self):
+		super (WorkerThread, self).__init__()
+		self.__nowExecQue = None
+
+	def onExecMain (self):
+		while True:
+			rtnVal = None
+
+			# que is MessageObject()
+			que = gBaseQue.deQue()
+			if que is None:
+				gBaseQue.waitQue()
+			else:
+				if not que.isEnable:
+					debugPrint("this queue is ignore")
+					continue
+
+				self.__nowExecQue = que
+
+				debugPrint("worker thread exec")
+
+				if que.isNeedRtnVal:
+					if que.isNeedArg:
+						rtnVal = que.cbFunc(que.arg)
+					else:
+						rtnVal = que.cbFunc()
+				else:
+					if que.isNeedArg:
+						que.cbFunc(que.arg)
+					else:
+						que.cbFunc()
+
+				if que.replyObj is not None:
+					# que.replyObj is UniqQue()
+					que.replyObj.reply(rtnVal)
+
+				self.__nowExecQue = None
+
+	# reference only
+	def getNowExecQue(self):
+		return copy.deepcopy(self.__nowExecQue)
+
+class MulticastReceiveThread (BaseThread, BaseFunc):
+	def __init__ (self):
+		super (MulticastReceiveThread, self).__init__(True)
+
+	def onExecMain (self):
 
 		sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 		serverAddr = ("239.255.255.250", 1900) # server address = "" --> INADDR_ANY
@@ -1404,10 +1453,7 @@ class MulticastReceiveThread(threading.Thread, BaseFunc):
 
 		while True:
 			try:
-				if not self.__isEnable:
-					self.__cond.acquire()
-					self.__cond.wait()
-					self.__cond.release()
+				self.checkWait ()
 
 				buff, addr = sock.recvfrom(4096)
 #				debugPrint(str(addr))
@@ -1520,39 +1566,13 @@ class MulticastReceiveThread(threading.Thread, BaseFunc):
 		qCond.release()
 		return isFound
 
-	def toggle(self):
-		if self.__isEnable:
-			self.__isEnable = False
-			print "[UPnP multicast receive stop]"
-		else:
-			self.__isEnable = True
-			self.__cond.acquire()
-			self.__cond.notify()
-			self.__cond.release()
-			print "[UPnP multicast receive start]"
-
-	def isEnable(self):
-		return self.__isEnable
-
-	def getId (self):
-		return self.__id
-
-class TimerThread(threading.Thread):
+class TimerThread (BaseThread):
 	def __init__(self):
-		super(TimerThread, self).__init__()
-		self.daemon = True
-		self.__cond = Condition()
-		self.__isEnable = True
-		self.__id = 0
+		super(TimerThread, self).__init__(True)
 
-	def run(self):
-		self.__id = threading.current_thread().ident
-
+	def onExecMain (self):
 		while True:
-			if not self.__isEnable:
-				self.__cond.acquire()
-				self.__cond.wait()
-				self.__cond.release()
+			self.checkWait ()
 
 			time.sleep(1)
 			self.__refreshAge()
@@ -1619,23 +1639,6 @@ class TimerThread(threading.Thread):
 					it.isEnable = False
 		qCond.release()
 
-	def toggle(self):
-		if self.__isEnable:
-			self.__isEnable = False
-			print "[cache-control(max-age) disable]"
-		else:
-			self.__isEnable = True
-			self.__cond.acquire()
-			self.__cond.notify()
-			self.__cond.release()
-			print "[cache-control(max-age) enable]"
-
-	def isEnable(self):
-		return self.__isEnable
-
-	def getId (self):
-		return self.__id
-
 class StaticHtmlParts():
 	def __init__(self, code, msg, desc):
 		self.code = code
@@ -1656,38 +1659,19 @@ gContentTypeMap = {\
 	"xml"     : "text/xml; charset=utf-8",\
 }
 
-class DeviceHostServerThread(threading.Thread, BaseFunc):
+class DeviceHostServerThread (BaseThread, BaseFunc):
 	def __init__(self):
-		super(DeviceHostServerThread, self).__init__()
-		self.daemon = True
-		self.__cond = Condition()
-		self.__isEnable = False
-		self.__id = 0
+		super(DeviceHostServerThread, self).__init__(False)
+		self.__sock = None
 
-	def run(self):
-		self.__id = threading.current_thread().ident
+	def onExecMain (self):
+		self.__sock = None
 
-		sock = None
 		while True:
 			try:
-				if not self.__isEnable:
-					if sock is not None:
-						sock.close ()
+				self.checkWait ()
 
-					self.__cond.acquire()
-					self.__cond.wait()
-					self.__cond.release()
-
-					sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-					sock.settimeout(2) # accept timeout
-					sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-					serverAddr = ("", DEVICE_HOST_PORT) # server address = "" --> INADDR_ANY
-					sock.bind(serverAddr)
-					#TODO
-					sock.listen(5)
-
-				conn, addr = sock.accept()
-
+				conn, addr = self.__sock.accept()
 				debugPrint ("client %s" % str(addr[0]))
 
 				try:
@@ -1735,6 +1719,24 @@ class DeviceHostServerThread(threading.Thread, BaseFunc):
 			except:
 				putsExceptMsg()
 				continue
+
+	def onDisable (self):
+		debugPrint ("onDisable")
+		if self.__sock is not None:
+			self.__sock.close ()
+
+	def onEnable (self):
+		debugPrint ("onEnable")
+		self.__createServerSocket ()
+
+	def __createServerSocket (self):
+		self.__sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+		self.__sock.settimeout(2) # accept timeout
+		self.__sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+		serverAddr = ("", DEVICE_HOST_PORT) # server address = "" --> INADDR_ANY
+		self.__sock.bind(serverAddr)
+		#TODO
+		self.__sock.listen(5)
 
 	# return
 	#     tuple[0]: HTTP status code
@@ -1894,23 +1896,6 @@ class DeviceHostServerThread(threading.Thread, BaseFunc):
 		html += "</HTML>\r\n"
 
 		return html
-
-	def toggle(self):
-		if self.__isEnable:
-			self.__isEnable = False
-			print "[pseudo DeviceHost server disable]"
-		else:
-			self.__isEnable = True
-			self.__cond.acquire()
-			self.__cond.notify()
-			self.__cond.release()
-			print "[pseudo DeviceHost server enable]"
-
-	def isEnable(self):
-		return self.__isEnable
-
-	def getId (self):
-		return self.__id
 
 class ControlPoint (BaseFunc):
 	def __init__(self, arg0=None, arg1=None, arg2=None, arg3=None):
