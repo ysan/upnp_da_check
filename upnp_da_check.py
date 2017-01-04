@@ -65,7 +65,6 @@ DEVICE_DISCRIPTION_PATH = "/ssdp/device-desc.xml"
 gDeviceInfoMap = {}
 gCmdList = []
 gBeforeCmd = "" 
-gChunkedRemain = 0
 gIfAddr = ""
 gIfName = ""
 gHwAddr = ""
@@ -420,7 +419,7 @@ class ServiceStateInfo():
 	def isSendEvents(self):
 		return self.__isSendEvents
 
-class HttpResponse(HTTPResponse):
+class HttpResponse (HTTPResponse):
 	def __init__(self, response):
 		self.fp = StringIO(response)
 		self.debuglevel = 0
@@ -429,24 +428,21 @@ class HttpResponse(HTTPResponse):
 		self._method = None
 		self.begin()
 
-class HttpRequest(BaseHTTPRequestHandler):
+class HttpRequest (BaseHTTPRequestHandler):
 	def __init__(self, request):
 		self.rfile = StringIO(request)
 		self.raw_requestline = self.rfile.readline()
 		self.error_code = self.error_message = None
 		self.parse_request()
 
-	def send_error(self, code, message):
-		self.error_code = code
-		self.error_message = message
-
 	def getheader (self, reqheader):
 		if reqheader is None or len(reqheader) == 0:
 			return None
 
-		for it in self.headers.iterkeys() :
+		for it in iter (self.headers.keys()):
 			pattern = "^" + reqheader + "$"
-			if re.search (pattern, str(it), re.IGNORECASE):
+			org = str(it).strip()
+			if re.search (pattern, org, re.IGNORECASE):
 				return self.headers[str(it)]
 
 		return None
@@ -653,30 +649,30 @@ class CommonFuncs():
 
 		return None
 
-	def recvSocketOnTcp(self, sock):
-		debugPrint("recvSocketOnTcp")
+	def recvSocketOnTcp (self, sock):
+
+		debugPrint ("recvSocketOnTcp")
 		totalData = ""
 		isContinue = False
 
 		while True:
 			data = sock.recv(65536)
-			if not data:
-				debugPrint("disconnected from server")
-				# TODO
-				if len(totalData) > 0:
+			if len (data) == 0:
+				debugPrint ("disconnected from partner.")
+				if len (totalData) > 0:
 					return totalData
 				else:
 					return None
 
-			debugPrint("sock.recv size " + str(len(data)))
+			debugPrint ("sock.recv size " + str(len(data)))
 			totalData += data
 
 			# select timeout 50mS
 			readfds = set([sock])
-			rList, wList, xList = select.select(readfds, [], [], 0.05)
+			rList, wList, xList = select.select (readfds, [], [], 0.05)
 			for r in iter(rList):
 				if r == sock:
-					debugPrint("sock in rList")
+					debugPrint ("sock in rList")
 					isContinue = True
 
 			if isContinue:
@@ -695,63 +691,50 @@ class CommonFuncs():
 	#               3: header is not able to receive all
 	#               4: chuked body
 	#     tuple[1]: remain size (return code is valid only when the 1)
-	#     tuple[2]: HTTP status code
-	def __checkHttpResponse(self, buff):
+	#     tuple[2]: HTTP status code  ex."200 OK"
+	def __checkHttpResponse (self, buff):
 		isHeaderReceived = False
-		term = ""
 		httpStatus = ""
+		bodyPart = ""
 
 		# check whether it has header reception completion
-		if buff.find("\r\n\r\n") >= 0:
-			isHeaderReceived = True
-			term = "\r\n"
-		else:
-			if buff.find("\n\n") >= 0:
+		for i in range (0, len(buff)):
+			if (i >= 3) and\
+				(buff[i-3] == "\r") and (buff[i-2] == "\n") and (buff[i-1] == "\r") and (buff[i] == "\n"):
+				bodyPart = buff[i+1:]
 				isHeaderReceived = True
-				term = "\n"
-			else:
-				isHeaderReceived = False
+				break
+
+		if not isHeaderReceived:
+			for i in range (0, len(buff)):
+				if (i >= 1) and (buff[i-1] == "\n") and (buff[i] == "\n"):
+					bodyPart = buff[i+1:]
+					isHeaderReceived = True
+					break
 
 		debugPrint("is all header received ? --> " + str(isHeaderReceived))
 		if isHeaderReceived:
 			res = HttpResponse(buff)
 			debugPrint("res status %d %s" % (res.status, res.reason))
 			httpStatus = "%d %s" % (res.status, res.reason)
-#			if res.status != 200:
-#				# error
-#				return (2, 0, httpStatus)
 
 			cl = res.getheader("Content-Length")
 			debugPrint("content length ------- " + str(cl))
 			if cl is not None:
-				spBuff = buff.split(term+term)
-				if len(spBuff) >= 2:
+				length = len (bodyPart)
+				debugPrint("current content length %d" % length)
 
-					# check spBuff data
-					length = 0
-					for i in range(0, len(spBuff)):
-						if i != 0:
-							length = length + len(spBuff[i])
-							if i >= 2:
-								length = length + len(term+term)
-					debugPrint("current content length %d" % length)
-
-					if long(cl) == length:
-						# all received
-						debugPrint("all received")
-						return (0, 0, httpStatus)
-					elif long(cl) > length:
-						# still the rest of the data
-						debugPrint("still the rest of the data")
-						return (1, long(cl) - length, httpStatus)
-					else:
-						# error
-						debugPrint("error")
-						return (2, 0, httpStatus)
+				if long(cl) == length:
+					# all received
+					debugPrint("all received")
+					return (0, 0, httpStatus)
+				elif long(cl) > length:
+					# still the rest of the data
+					debugPrint("still the rest of the data")
+					return (1, long(cl) - length, httpStatus)
 				else:
-					# unexpected
-					debugPrint("term split is unexpected.  len(spBuff) " + str(len(spBuff)))
-					debugPrint("[" + buff + "]")
+					# unexpected - content-length < current content length
+					debugPrint ("content-length < current content length")
 					return (2, 0, httpStatus)
 
 			else:
@@ -778,55 +761,162 @@ class CommonFuncs():
 			debugPrint("[" + buff + "]")
 			return (3, 0, httpStatus)
 
-	def __checkChunkedData(self, data, isFirst):
+	# return tuple
+	#     tuple[0]: return code
+	#               0: ok (all received)
+	#               1: still the rest of the data
+	#               2: error
+	#               3: header is not able to receive all
+	#               4: chuked body
+	#     tuple[1]: remain size (return code is valid only when the 1)
+	#     tuple[2]: HTTP request line
+	def __checkHttpRequest (self, buff):
+		isHeaderReceived = False
+		httpRequestLine = ""
+		bodyPart = ""
+
+		# check whether it has header reception completion
+		for i in range (0, len(buff)):
+			if (i >= 3) and\
+				(buff[i-3] == "\r") and (buff[i-2] == "\n") and (buff[i-1] == "\r") and (buff[i] == "\n"):
+				bodyPart = buff[i+1:]
+				isHeaderReceived = True
+				break
+
+		if not isHeaderReceived:
+			for i in range (0, len(buff)):
+				if (i >= 1) and (buff[i-1] == "\n") and (buff[i] == "\n"):
+					bodyPart = buff[i+1:]
+					isHeaderReceived = True
+					break
+
+		debugPrint("is all header received ? --> " + str(isHeaderReceived))
+		if isHeaderReceived:
+			req = HttpRequest (buff)
+			if req.error_code is not None:
+				# invalid request
+				return (2, 0, httpRequestLine)
+
+			debugPrint ("req [%s %s %s]" % (req.command, req.path, req.request_version))
+			httpRequestLine = "%s %s %s" % (req.command, req.path, req.request_version)
+
+			cl = req.getheader("Content-Length")
+			debugPrint ("content length ------- " + str(cl))
+			if cl is not None:
+
+				length = len (bodyPart)
+				debugPrint("current content length %d" % length)
+
+				if long(cl) == length:
+					# all received
+					debugPrint("all received")
+					return (0, 0, httpRequestLine)
+				elif long(cl) > length:
+					# still the rest of the data
+					debugPrint("still the rest of the data")
+					return (1, long(cl) - length, httpRequestLine)
+				else:
+					# unexpected - content-length < current content length
+					debugPrint ("unexpected - content-length < current content length")
+					return (2, 0, httpRequestLine)
+
+			else:
+				te = req.getheader("Transfer-Encoding")
+				debugPrint("transfer encoding ------- " + str(te))
+				if te is not None:
+					if re.match("chunked", te, re.IGNORECASE):
+						# chunked
+						return (4, 0, httpRequestLine)
+					else:
+						#TODO
+						# only chunked
+						return (2, 0, httpRequestLine)
+				else:
+					# all received
+					debugPrint("header only data")
+					return (0, 0, httpRequestLine)
+
+		else:
+			# header is not able to receive all
+			debugPrint ("header is not able to receive all")
+			debugPrint ("[" + buff + "]")
+			return (3, 0, httpRequestLine)
+
+	# return tuple
+	#     tuple[0]: return code
+	#               0: ok (all received)
+	#               1: still the rest of the data
+	#               2: unexpected error
+	#     tuple[1]: HTTP body  (valid data at only return conde=0)
+	def __checkChunkedData (self, buff):
 		debugPrint("checkChunkedData")
 
-		global gChunkedRemain
-		chu = ""
-		if isFirst:
-			gChunkedRemain = 0
+		chunkPart = ""
+		isFound = False
 
-			spData = data.split("\r\n\r\n")
-			if len(spData) >= 2:
-				chu = spData[1];
-			else:
-				# unexpected
-				return 2
-		else:
-			chu = data
+		for i in range (0, len(buff)):
+			if (i >= 3) and\
+				(buff[i-3] == "\r") and (buff[i-2] == "\n") and (buff[i-1] == "\r") and (buff[i] == "\n"):
+				chunkPart = buff[i+1:]
+				isFound = True
+				break
 
+		if not isFound:
+			for i in range (0, len(buff)):
+				if (i >= 1) and (buff[i-1] == "\n") and (buff[i] == "\n"):
+					chunkPart = buff[i+1:]
+					isFound = True
+					break
 
-		spChu = chu.split("\r\n")
-#		debugPrint("spChu num:[%d]" % len(spChu))
-		if len(spChu) == 1:
-			# still the rest of the data @1line
-			return 1
+		if not isFound:
+			# unexpected
+			return (2, None)
 
-		elif len(spChu) > 1:
-			i = 0
-			rtn = 1 # init 1
-			length = 0
-			while len(spChu) > i:
-#				debugPrint("[%s]" % str(spChu[i]))
+		i = 0
+		rtn = (2, None)
+		remain = 0
+		body = ""
 
-				if len(spChu[i]) != 0:
-					if self.__isHexCharOnly(spChu[i]):
-						gChunkedRemain = long(spChu[i], 16)
-						debugPrint("gChunkedRemain " + str(gChunkedRemain))
-						if gChunkedRemain == 0:
+		spChunk = chunkPart.split("\r\n")
+		debugPrint("spChunk num:[%d]" % len(spChunk))
+		if len(spChunk) >= 1:
+
+			while len(spChunk) > i:
+				debugPrint("while check [%s]" % str(spChunk[i]))
+
+				if len(spChunk[i]) == 0:
+					# still the rest of the data
+					debugPrint ("spChunk[i] : len(spChunk[i])==0  --> still the rest of the data")
+
+				else :
+					if (remain == 0) and self.__isHexCharOnly(spChunk[i]):
+						#--- size line
+						remain = long(spChunk[i], 16)
+						debugPrint("remain " + str(remain))
+						if remain == 0:
 							debugPrint("chunked data complete")
-							return 0
+							debugPrint("body [%s]" % body)
+							return (0, body)
 					else:
-						if len(spChu[i]) == gChunkedRemain:
-							rtn = 1
-						elif len(spChu[i]) < gChunkedRemain:
-							gChunkedRemain = gChunkedRemain - len(spChu[i])
-							rtn = 1
+						#--- data line
+						if len(spChunk[i]) <= remain:
+							# still the rest of the data
+							remain = remain - len(spChunk[i])
+							debugPrint ("still the rest of the data -- remain %d" % remain)
+							body += spChunk[i]
 						else:
-							# unexpected error
-							return 2
+							# unexpected
+							debugPrint ("unexpected -- data len %d > remain %d" % (len(spChunk[i]), remain))
+							return (2, None)
 
 				i = i + 1
+
+			# while end --> still the rest of the data
+			rtn = (1, None)
+
+		else:
+			# still the rest of the data
+			rtn = (1, None)
 
 		return rtn
 
@@ -870,8 +960,8 @@ class CommonFuncs():
 
 	# return tuple
 	#     tuple[0]: response body
-	#     tuple[1]: HTTP status code
-	def __sendrecvOnTcp(self, addr, port, msg, timeout):
+	#     tuple[1]: HTTP status code  ex."200 OK"
+	def __sendrecvOnTcpClientOverHttp (self, addr, port, msg, timeout):
 		try:
 			sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 			sock.settimeout(timeout)
@@ -893,7 +983,7 @@ class CommonFuncs():
 				buffTotal = buffTotal + buff
 
 				if kind == -1 or kind == 3:
-					rtn = self.__checkHttpResponse(buffTotal)
+					rtn = self.__checkHttpResponse (buffTotal)
 					debugPrint("checkHttpResponse " + str(rtn))
 					kind = rtn[0]
 					remain = rtn[1]
@@ -913,12 +1003,12 @@ class CommonFuncs():
 						continue
 					elif kind == 4:
 						# chuked body
-						crtn = self.__checkChunkedData(buffTotal, True)
-						if crtn == 0:
+						crtn = self.__checkChunkedData (buffTotal)
+						if crtn[0] == 0:
 							# chunked data complete
 							break
-						elif crtn == 1:
-							# still the rest of the data @1line
+						elif crtn[0] == 1:
+							# still the rest of the data
 							continue
 						else:
 							# unexpected
@@ -933,15 +1023,19 @@ class CommonFuncs():
 						remain = remain - len(buff)
 						continue
 					else:
+						# unexpected
 						return (None, httpStatus)
 
 				elif kind == 4:
-					crtn = self.__checkChunkedData(buff, False)
-					if crtn == 0:
+					crtn = self.__checkChunkedData (buffTotal)
+					if crtn[0] == 0:
+						# chunked data complete
 						break
-					elif crtn == 1:
+					elif crtn[0] == 1:
+						# still the rest of the data
 						continue
 					else:
+						# unexpected
 						return (None, httpStatus)
 
 			sock.close()
@@ -964,6 +1058,111 @@ class CommonFuncs():
 			sock.close()
 			putsExceptMsg()
 			return (None, "")
+
+	# return tuple
+	#     tuple[0]: all received data
+	#     tuple[1]: request body
+	#     tuple[2]: HTTP request line
+	def recvOnTcpServerOverHttp (self, sock, timeout):
+		try:
+			sock.settimeout(timeout)
+
+			buffTotal = ""
+			kind = -1
+			remain = 0
+			httpRequestLine = ""
+			crtn = 0
+			resolvedChunkedBody = ""
+
+			while True:
+				buff = self.recvSocketOnTcp(sock)
+				if buff is None:
+					break
+
+#				debugPrint("[" + buff + "]")
+				buffTotal = buffTotal + buff
+
+				if kind == -1 or kind == 3:
+					rtn = self.__checkHttpRequest (buffTotal)
+					debugPrint("checkHttpResquest " + str(rtn))
+					kind = rtn[0]
+					remain = rtn[1]
+					httpRequestLine = rtn[2]
+
+					if kind == 0:
+						# ok (all received)
+						break
+					elif kind == 1:
+						# still the rest of the data
+						continue
+					elif kind == 2:
+						# error
+						return (None, None, httpRequestLine)
+					elif kind == 3:
+						# header is not able to receive all
+						continue
+					elif kind == 4:
+						# chuked body
+						crtn = self.__checkChunkedData (buffTotal)
+						if crtn[0] == 0:
+							# chunked data complete
+							resolvedChunkedBody = crtn[1]
+							break
+						elif crtn[0] == 1:
+							# still the rest of the data
+							continue
+						else:
+							# unexpected
+							return (None, None, httpRequestLine)
+
+				elif kind == 1:
+					if remain == len(buff):
+						debugPrint("remain == len(buff)")
+						break
+					elif remain > len(buff):
+						debugPrint("remain > len(buff)")
+						remain = remain - len(buff)
+						continue
+					else:
+						# unexpected
+						return (None, None, httpRequestLine)
+
+				elif kind == 4:
+					crtn = self.__checkChunkedData (buffTotal)
+					if crtn[0] == 0:
+						# chunked data complete
+						resolvedChunkedBody = crtn[1]
+						break
+					elif crtn[0] == 1:
+						# still the rest of the data
+						continue
+					else:
+						# unexpected
+						return (None, None, httpRequestLine)
+
+#			sock.close()
+
+			if len (buffTotal) > 0:
+				if kind != 4:
+					req = HttpRequest (buffTotal)
+#					debugPrint(buffTotal)
+					body = req.rfile.read()
+					return (buffTotal, body, httpRequestLine)
+				else:
+					# chunked body
+					return (buffTotal, resolvedChunkedBody, httpRequestLine) 
+			else:
+				return (None, None, httpRequestLine)
+
+		except socket.timeout:
+#			sock.close()
+			debugPrint("tcp socket timeout")
+			return (None, None, "")
+
+		except:
+#			sock.close()
+			putsExceptMsg()
+			return (None, None, "")
 
 	def getHttpContent(self, addr, url):
 		if addr is None or len(addr) == 0 or\
@@ -998,7 +1197,7 @@ class CommonFuncs():
 		msg += "\r\n"
 		debugPrint(msg)
 
-		return self.__sendrecvOnTcp(addr, port, msg, 5)
+		return self.__sendrecvOnTcpClientOverHttp (addr, port, msg, 5)
 
 	def postSoapAction(self, addr, url, actionInfo, reqArgList):
 		if addr is None or len(addr) == 0 or\
@@ -1063,7 +1262,7 @@ class CommonFuncs():
 
 		debugPrint(msg)
 
-		return self.__sendrecvOnTcp(addr, port, msg, 20)
+		return self.__sendrecvOnTcpClientOverHttp (addr, port, msg, 20)
 
 	def getSoapResponse(self, xml, actionInfo):
 		resArgList = []
@@ -1699,35 +1898,30 @@ class DeviceHostServerThread (BaseThread, CommonFuncs):
 				conn, addr = self.__sock.accept()
 				debugPrint ("client %s" % str(addr[0]))
 
-				try:
-					conn.settimeout(3) # client socket timeout
-					buff = self.recvSocketOnTcp (conn)
-					if buff is None:
-						conn.close()
-						continue
-				except socket.timeout:
-						debugPrint("client socket timeout")
-						conn.close()
-						continue
+#DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD timeout 60
+				rtnTSH = self.recvOnTcpServerOverHttp (conn, 60)
+				buff = rtnTSH[0]
+				requestBody = rtnTSH[1]
+				requestLine = rtnTSH[2]
+				if buff is None:
+					print "client:%s !!!! invalid HTTP request !!!!" % str(addr[0])
+					conn.close()
+					continue
 
 				debugPrint(buff)
 
-				req = HttpRequest (buff)
-				resParts = self.__checkRequest (req)
+				resParts = self.__checkRequest (buff)
 				resMsg = self.__createResponseMsg (resParts[0], resParts[1], resParts[2])
 
 				debugPrint (resMsg)
 
-				# access log
+				####   access log   ####
 				resStatusCode = resParts[0]
 				resStatusMsg = ""
-				if gStaticHtmlMap.has_key (resParts[0]) :
-					resStatusMsg = gStaticHtmlMap[resParts[0]].msg
-				if req.error_code is None:
-					print "client:%s [%s %s %s] --> %d %s" %\
-									(str(addr[0]), req.command, req.path, req.request_version, resStatusCode, resStatusMsg)
-				else :
-					print "client:%s !!!! invalid HTTP request !!!!" % str(addr[0])
+				if gStaticHtmlMap.has_key (resStatusCode) :
+					resStatusMsg = gStaticHtmlMap[resStatusCode].msg
+				print "client:%s [%s] --> %d %s" %\
+							(str(addr[0]), requestLine, resStatusCode, resStatusMsg)
 
 
 				conn.send (resMsg)
@@ -1767,14 +1961,15 @@ class DeviceHostServerThread (BaseThread, CommonFuncs):
 	#     tuple[0]: HTTP status code
 	#     tuple[1]: response body
 	#     tuple[2]: content type
-	def __checkRequest (self, req):
-		if req is None:
+	def __checkRequest (self, buff):
+		if buff is None or len (buff) == 0:
 			return None
 
 		code = 200
 		resBody = ""
 		conType = ""
 
+		req = HttpRequest (buff)
 		if req.error_code is None:
 			path = "." + req.path
 
