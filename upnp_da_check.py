@@ -77,9 +77,8 @@ gWorkerThread = None
 gSsdpListener = None
 gTimerThread = None
 gMsearchThread = None
-gDeviceHostServerThread = None
+gPseudoDMS = None
 gLockDeviceInfoMap = threading.Lock()
-gIsEnableDeviceHost = False
 
 
 class State(Enum):
@@ -718,41 +717,43 @@ class CommonFuncs():
 			debugPrint("res status %d %s" % (res.status, res.reason))
 			httpStatus = "%d %s" % (res.status, res.reason)
 
-			cl = res.getheader("Content-Length")
-			debugPrint("content length ------- " + str(cl))
-			if cl is not None:
-				length = len (bodyPart)
-				debugPrint("current content length %d" % length)
+			te = res.getheader("Transfer-Encoding")
+			debugPrint("transfer encoding ------- " + str(te))
+			if te is not None:
 
-				if long(cl) == length:
-					# all received
-					debugPrint("all received")
-					return (0, 0, httpStatus)
-				elif long(cl) > length:
-					# still the rest of the data
-					debugPrint("still the rest of the data")
-					return (1, long(cl) - length, httpStatus)
+				if re.match("chunked", te, re.IGNORECASE):
+					# chunked
+					return (4, 0, httpStatus)
 				else:
-					# unexpected - content-length < current content length
-					debugPrint ("content-length < current content length")
+					#TODO
+					# only chunked
 					return (2, 0, httpStatus)
-
 			else:
-				te = res.getheader("Transfer-Encoding")
-				debugPrint("transfer encoding ------- " + str(te))
-				if te is not None:
-					if re.match("chunked", te, re.IGNORECASE):
-						# chunked
-						return (4, 0, httpStatus)
+				cl = res.getheader("Content-Length")
+				debugPrint("content length ------- " + str(cl))
+				if cl is not None:
+
+					length = len (bodyPart)
+					debugPrint("current content length %d" % length)
+
+					if long(cl) == length:
+						# all received
+						debugPrint("all received")
+						return (0, 0, httpStatus)
+					elif long(cl) > length:
+						# still the rest of the data
+						debugPrint("still the rest of the data")
+						return (1, long(cl) - length, httpStatus)
 					else:
-						#TODO
-						# only chunked
+						# unexpected - content-length < current content length
+						debugPrint ("content-length < current content length")
 						return (2, 0, httpStatus)
+
 				else:
 					debugPrint("[" + buff + "]")
 					#TODO
-					# Content-Length, Transfer-Encoding can not both exist
-					# And it can be received for the time being all
+					# Content-Length, Transfer-Encoding not both exist
+					# no body...
 					return (0, 0, httpStatus)
 
 		else:
@@ -800,37 +801,39 @@ class CommonFuncs():
 			debugPrint ("req [%s %s %s]" % (req.command, req.path, req.request_version))
 			httpRequestLine = "%s %s %s" % (req.command, req.path, req.request_version)
 
-			cl = req.getheader("Content-Length")
-			debugPrint ("content length ------- " + str(cl))
-			if cl is not None:
+			te = req.getheader("Transfer-Encoding")
+			debugPrint("transfer encoding ------- " + str(te))
+			if te is not None:
 
-				length = len (bodyPart)
-				debugPrint("current content length %d" % length)
-
-				if long(cl) == length:
-					# all received
-					debugPrint("all received")
-					return (0, 0, httpRequestLine)
-				elif long(cl) > length:
-					# still the rest of the data
-					debugPrint("still the rest of the data")
-					return (1, long(cl) - length, httpRequestLine)
+				if re.match("chunked", te, re.IGNORECASE):
+					# chunked
+					return (4, 0, httpRequestLine)
 				else:
-					# unexpected - content-length < current content length
-					debugPrint ("unexpected - content-length < current content length")
+					#TODO
+					# only chunked
 					return (2, 0, httpRequestLine)
 
 			else:
-				te = req.getheader("Transfer-Encoding")
-				debugPrint("transfer encoding ------- " + str(te))
-				if te is not None:
-					if re.match("chunked", te, re.IGNORECASE):
-						# chunked
-						return (4, 0, httpRequestLine)
+				cl = req.getheader("Content-Length")
+				debugPrint ("content length ------- " + str(cl))
+				if cl is not None:
+
+					length = len (bodyPart)
+					debugPrint("current content length %d" % length)
+
+					if long(cl) == length:
+						# all received
+						debugPrint("all received")
+						return (0, 0, httpRequestLine)
+					elif long(cl) > length:
+						# still the rest of the data
+						debugPrint("still the rest of the data")
+						return (1, long(cl) - length, httpRequestLine)
 					else:
-						#TODO
-						# only chunked
+						# unexpected - content-length < current content length
+						debugPrint ("unexpected - content-length < current content length")
 						return (2, 0, httpRequestLine)
+
 				else:
 					# all received
 					debugPrint("header only data")
@@ -1062,7 +1065,7 @@ class CommonFuncs():
 	# return tuple
 	#     tuple[0]: all received data
 	#     tuple[1]: request body
-	#     tuple[2]: HTTP request line
+	#     tuple[2]: HTTP request line / "timeout" or "exception"
 	def recvOnTcpServerOverHttp (self, sock, timeout):
 		try:
 			sock.settimeout(timeout)
@@ -1157,12 +1160,12 @@ class CommonFuncs():
 		except socket.timeout:
 #			sock.close()
 			debugPrint("tcp socket timeout")
-			return (None, None, "")
+			return (None, None, "timeout")
 
 		except:
 #			sock.close()
 			putsExceptMsg()
-			return (None, None, "")
+			return (None, None, "exception")
 
 	def getHttpContent(self, addr, url):
 		if addr is None or len(addr) == 0 or\
@@ -1539,15 +1542,15 @@ class BaseThread (threading.Thread):
 		self.onExecMain ()
 
 	# virtual
-	def onExecMain (self):
-		return
-
-	# virtual
 	def onDisable (self):
 		return
 
 	# virtual
 	def onEnable (self):
+		return
+
+	# virtual
+	def onExecMain (self):
 		return
 
 	def toggle (self):
@@ -1561,7 +1564,7 @@ class BaseThread (threading.Thread):
 			self.__cond.release()
 			print "[%s enable]" % self.__class__.__name__
 
-	def checkWait (self):
+	def checkDisable (self):
 		if not self.__isEnable:
 
 			self.onDisable()
@@ -1641,9 +1644,9 @@ class WorkerThread (BaseThread):
 
 # abstract
 # UPnP multicast packet receiver
-class MulticastReceiver (BaseThread, CommonFuncs):
+class UpnpMulticastReceiver (BaseThread, CommonFuncs):
 	def __init__ (self):
-		super (MulticastReceiver, self).__init__(True)
+		super (UpnpMulticastReceiver, self).__init__(True)
 
 	def onExecMain (self):
 
@@ -1655,7 +1658,7 @@ class MulticastReceiver (BaseThread, CommonFuncs):
 
 		while True:
 			try:
-				self.checkWait ()
+				self.checkDisable ()
 
 				buff, addr = sock.recvfrom(4096)
 #				debugPrint(str(addr))
@@ -1687,7 +1690,7 @@ class MulticastReceiver (BaseThread, CommonFuncs):
 	def onSsdpMsearch (self, inaddr, inport, packet):
 		return
 
-class SsdpListener (MulticastReceiver, CommonFuncs):
+class SsdpListener (UpnpMulticastReceiver, CommonFuncs):
 	def __init__ (self):
 		super (SsdpListener, self).__init__()
 
@@ -1751,11 +1754,14 @@ class SsdpListener (MulticastReceiver, CommonFuncs):
 
 	def onSsdpMsearch (self, inaddr, inport, packet):
 
-		if not gIsEnableDeviceHost:
+		if not gPseudoDMS.isEnable():
 			return
 
-		host = self.getHeader (buff, "HOST")
-		st = self.getHeader (buff, "ST")
+#		if inaddr == "43.3.182.45":
+#			print packet
+
+		host = self.getHeader (packet, "HOST")
+		st = self.getHeader (packet, "ST")
 
 #		if not re.match ("upnp *: *rootdevice", st, re.IGNORECASE):
 #			continue
@@ -1796,7 +1802,7 @@ class TimerThread (BaseThread):
 
 	def onExecMain (self):
 		while True:
-			self.checkWait ()
+			self.checkDisable ()
 
 			time.sleep(1)
 			self.__refreshAge()
@@ -1869,61 +1875,85 @@ class StaticHtmlParts():
 		self.msg = msg
 		self.desc = desc
 
-gStaticHtmlMap = {\
+gStaticHtmlTable = {\
 	200 : StaticHtmlParts (200, "OK"                   , ""),\
 	400 : StaticHtmlParts (400, "Bad Request"          , "The request was bad."),\
-	404 : StaticHtmlParts (404, "Not Found"            , "The requested URL was not found on this server.  orz"),\
+	404 : StaticHtmlParts (404, "Not Found"            , "The requested URL was not found on this server."),\
 	500 : StaticHtmlParts (500, "Internal Server Error", "The server encountered an internal error or misocnfiguration and was unable to complete your request."),\
 	501 : StaticHtmlParts (501, "Not Implemented"      , "The request was not implemented on this server."),\
 }
 
-gContentTypeMap = {\
+gContentTypeTable = {\
 	"defalut" : "text/plane; charset=utf-8",\
 	"html"    : "text/html; charset=utf-8",\
 	"xml"     : "text/xml; charset=utf-8",\
 }
 
-class DeviceHostServerThread (BaseThread, CommonFuncs):
+class BaseSimpleHttpServer (BaseThread, CommonFuncs):
 	def __init__(self):
-		super(DeviceHostServerThread, self).__init__(False)
+		super(BaseSimpleHttpServer, self).__init__(False)
 		self.__sock = None
+
+	def onDisable (self):
+		debugPrint ("onDisable")
+		if self.__sock is not None:
+			self.__sock.close ()
+
+	def onEnable (self):
+		debugPrint ("onEnable")
+		self.__createServerSocket ()
 
 	def onExecMain (self):
 		self.__sock = None
 
 		while True:
 			try:
-				self.checkWait ()
+				self.checkDisable ()
 
 				conn, addr = self.__sock.accept()
 				debugPrint ("client %s" % str(addr[0]))
 
-#DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD timeout 60
-				rtnTSH = self.recvOnTcpServerOverHttp (conn, 60)
+#DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD client socket timeout 5
+				rtnTSH = self.recvOnTcpServerOverHttp (conn, 5)
 				buff = rtnTSH[0]
 				requestBody = rtnTSH[1]
 				requestLine = rtnTSH[2]
-				if buff is None:
-					print "client:%s !!!! invalid HTTP request !!!!" % str(addr[0])
+
+				code = 0
+				resMsg = ""
+
+				if rtnTSH[2] == "timeout":
 					conn.close()
 					continue
 
-				debugPrint(buff)
+				elif rtnTSH[2] == "exception":
+					code = 500
+					resBody = self.createErrHtml (code)
+					conType = self.getContentType ("html")
+					resMsg = self.__createResponseMsg (code, resBody, conType)
+					debugPrint (resMsg)
+					self.__accessLog (str(addr[0]), requestLine, code)
 
-				resParts = self.__checkRequest (buff)
-				resMsg = self.__createResponseMsg (resParts[0], resParts[1], resParts[2])
+				else:
+					if buff is not None:
+						debugPrint(buff)
 
-				debugPrint (resMsg)
+						res = self.__checkRequestAndCreateResponseMsg (buff)
+						code = res[0]
+						resMsg = res[1]
+						debugPrint (resMsg)
+						self.__accessLog (str(addr[0]), requestLine, code)
 
-				####   access log   ####
-				resStatusCode = resParts[0]
-				resStatusMsg = ""
-				if gStaticHtmlMap.has_key (resStatusCode) :
-					resStatusMsg = gStaticHtmlMap[resStatusCode].msg
-				print "client:%s [%s] --> %d %s" %\
-							(str(addr[0]), requestLine, resStatusCode, resStatusMsg)
+					else:
+						code = 400
+						resBody = self.createErrHtml (code)
+						conType = self.getContentType ("html")
+						resMsg = self.__createResponseMsg (code, resBody, conType)
+						debugPrint (resMsg)
+						self.__accessLog (str(addr[0]), "!!!! invalid HTTP request !!!!", code)
 
 
+				# send response to client
 				conn.send (resMsg)
 
 
@@ -1939,15 +1969,6 @@ class DeviceHostServerThread (BaseThread, CommonFuncs):
 				putsExceptMsg()
 				continue
 
-	def onDisable (self):
-		debugPrint ("onDisable")
-		if self.__sock is not None:
-			self.__sock.close ()
-
-	def onEnable (self):
-		debugPrint ("onEnable")
-		self.__createServerSocket ()
-
 	def __createServerSocket (self):
 		self.__sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 		self.__sock.settimeout(2) # accept timeout
@@ -1957,94 +1978,175 @@ class DeviceHostServerThread (BaseThread, CommonFuncs):
 		#TODO
 		self.__sock.listen(5)
 
+	def __accessLog (self, inaddr, requestLine, resStatusCode):
+		if inaddr is None or len (inaddr) == 0 or\
+			requestLine is None or len(requestLine) == 0 or\
+			resStatusCode is None or resStatusCode == 0:
+			return
+
+		resStatusMsg = ""
+
+		if gStaticHtmlTable.has_key (resStatusCode) :
+			resStatusMsg = gStaticHtmlTable[resStatusCode].msg
+		print "client:%s [%s] --> %d %s" %\
+					(inaddr, requestLine, resStatusCode, resStatusMsg)
+
 	# return
 	#     tuple[0]: HTTP status code
-	#     tuple[1]: response body
-	#     tuple[2]: content type
-	def __checkRequest (self, buff):
-		if buff is None or len (buff) == 0:
-			return None
+	#     tuple[1]: response msg
+	def __checkRequestAndCreateResponseMsg (self, packet):
+		if packet is None or len (packet) == 0:
+			code = 500
+			resBody = self.createErrHtml (code)
+			conType = self.getContentType ("html")
+			return self.__createResponseMsg (code, resBody, conType)
 
 		code = 200
 		resBody = ""
 		conType = ""
 
-		req = HttpRequest (buff)
+		isHeaderOnly = False
+
+		req = HttpRequest (packet)
 		if req.error_code is None:
-			path = "." + req.path
 
-			if req.command == "GET" or req.command == "HEAD":
-				if os.path.isdir (path):
-					# directory
-					html = self.__createHtmlFromDirPath (path)
-					if html is not None:
-						code = 200
-						resBody = html
-						conType = self.__getContentType ("html")
-					else:
-						code = 404
-						resBody = self.__createErrHtml (code)
-						conType = self.__getContentType ("html")
+			if req.command == "GET":
+				rtn = self.onHttpMethod_GET (req.path, packet)
+				code = rtn[0]
+				resBody = rtn[1]
+				conType = rtn[2]
 
-				else:
-					if os.path.exists (path):
-						# file
+			elif req.command == "HEAD":
+				rtn = self.onHttpMethod_HEAD (req.path, packet)
+				code = rtn[0]
+				resBody = rtn[1]
+				conType = rtn[2]
 
-						f = open (path, 'r')
-						file = ""
-						for row in f:
-							file += row
+				# header only
+				isHeaderOnly = True
 
-						code = 200
-						resBody = file
-
-						#TODO File type judge
-						root, ext = os.path.splitext (path)
-						tmpext = re.sub ("^\.", "", ext)
-						conType = self.__getContentType (tmpext)
-
-					else:
-						code = 404
-						resBody = self.__createErrHtml (code)
-						conType = self.__getContentType ("html")
+			elif req.command == "POST":
+				rtn = self.onHttpMethod_POST (req.path, packet)
+				code = rtn[0]
+				resBody = rtn[1]
+				conType = rtn[2]
 
 			else:
 				debugPrint ("unsupport method:%s" % req.command)
 
 				code = 501
-				resBody = self.__createErrHtml (code)
-				conType = self.__getContentType ("html")
+				resBody = self.createErrHtml (code)
+				conType = self.getContentType ("html")
 
 		else:
 			debugPrint ("req.error_message -- %s" % req.error_message)
-
 			code = 400
-			resBody = self.__createErrHtml (code)
-			conType = self.__getContentType ("html")
+			resBody = self.createErrHtml (code)
+			conType = self.getContentType ("html")
 
+		return (code, self.__createResponseMsg (code, resBody, conType, isHeaderOnly))
 
-		if req.command == "HEAD":
-			resBody = ""
+	# virtual
+	# return
+	#     tuple[0]: HTTP status code
+	#     tuple[1]: response body
+	#     tuple[2]: content type
+	def onHttpMethod_GET (self, reqPath, packet):
+		if reqPath is None or len (reqPath) == 0 or\
+			packet is None or len (packet) == 0:
+
+			code = 500
+			resBody = self.createErrHtml (code)
+			conType = self.getContentType ("html")
+			return (code, resBody, conType)
+
+		path = "." + reqPath
+
+		code = 200
+		resBody = ""
+		conType = ""
+
+		if os.path.isdir (path):
+			# directory
+			html = self.__createHtmlFromDirPath (path)
+			if html is not None:
+				code = 200
+				resBody = html
+				conType = self.getContentType ("html")
+			else:
+				code = 404
+				resBody = self.createErrHtml (code)
+				conType = self.getContentType ("html")
+
+		else:
+			if os.path.exists (path):
+				# file
+
+				f = open (path, 'r')
+				file = ""
+				for row in f:
+					file += row
+
+				code = 200
+				resBody = file
+
+				#TODO File type judge
+				root, ext = os.path.splitext (path)
+				tmpext = re.sub ("^\.", "", ext)
+				conType = self.getContentType (tmpext)
+
+			else:
+				code = 404
+				resBody = self.createErrHtml (code)
+				conType = self.getContentType ("html")
 
 		return (code, resBody, conType)
 
-	def __getContentType (self, fileKind):
+	# virtual
+	# return
+	#     tuple[0]: HTTP status code
+	#     tuple[1]: response body
+	#     tuple[2]: content type
+	def onHttpMethod_HEAD (self, reqPath, packet):
+		return self.onHttpMethod_GET (reqPath, packet)
+
+	# virtual
+	# return
+	#     tuple[0]: HTTP status code
+	#     tuple[1]: response body
+	#     tuple[2]: content type
+	def onHttpMethod_POST (self, reqPath, packet):
+		debugPrint ("unsupport method:POST")
+
+		code = 501
+		resBody = self.createErrHtml (code)
+		conType = self.getContentType ("html")
+
+		return (code, resBody, conType)
+
+	def getContentType (self, fileKind):
 		if (fileKind is None) or (len (fileKind)) == 0:
-			return gContentTypeMap["defalut"]
+			return gContentTypeTable["defalut"]
 
-		if not gContentTypeMap.has_key (fileKind) :
-			return gContentTypeMap["defalut"]
+		if not gContentTypeTable.has_key (fileKind) :
+			return gContentTypeTable["defalut"]
 		else :
-			return gContentTypeMap[fileKind]
+			return gContentTypeTable[fileKind]
 
-	def __createResponseMsg (self, code, resBody, conType):
+	def __createResponseMsg (self, code, resBody, conType, isHeaderOnly=False):
 		if code is None or code == 0 or\
 			resBody is None or len (resBody) == 0 or\
 			conType is None or len (conType) == 0 :
-			return None
 
-		if not gStaticHtmlMap.has_key (code) :
-			return None
+			code = 500
+			resBody = self.createErrHtml (code)
+			conType = self.getContentType ("html")
+
+		if not gStaticHtmlTable.has_key (code) :
+			code = 500
+			resBody = self.createErrHtml (code)
+			conType = self.getContentType ("html")
+
 
 		#TODO
 		HTTP_VER = "HTTP/1.1"
@@ -2052,13 +2154,13 @@ class DeviceHostServerThread (BaseThread, CommonFuncs):
 		connection = "close"
 
 		resMsg = ""
-		resMsg += "%s %d %s\r\n" % (HTTP_VER, code, gStaticHtmlMap[code].msg)
+		resMsg += "%s %d %s\r\n" % (HTTP_VER, code, gStaticHtmlTable[code].msg)
 		resMsg += "Content-Type: %s\r\n" % conType
 		resMsg += "Connection: %s\r\n" % connection
+		resMsg += "Content-Length: %d\r\n" % len (resBody)
+		resMsg += "\r\n"
 
-		if (resBody is not None) and (len (resBody) != 0):
-			resMsg += "Content-Length: %d\r\n" % len (resBody)
-			resMsg += "\r\n"
+		if not isHeaderOnly:
 			resMsg += resBody
 
 		return resMsg
@@ -2099,23 +2201,104 @@ class DeviceHostServerThread (BaseThread, CommonFuncs):
 
 		return html
 
-	def __createErrHtml (self, code):
+	def createErrHtml (self, code):
 		if code is None or code == 0 :
 			return None
 
-		if not gStaticHtmlMap.has_key (code) :
+		if not gStaticHtmlTable.has_key (code) :
 			return None
 
 		html  = "<HTML>\r\n"
 		html += "  <HEAD>\r\n"
-		html += "    <TITLE>%d %s</TITLE>\r\n" % (code, gStaticHtmlMap[code].msg)
+		html += "    <TITLE>%d %s</TITLE>\r\n" % (code, gStaticHtmlTable[code].msg)
 		html += "  </HEAD>\r\n"
 		html += "  <BODY>\r\n"
-		html += "    <H1>%s</H1>%s\r\n" % (gStaticHtmlMap[code].msg, gStaticHtmlMap[code].desc)
+		html += "    <H1>%s</H1>%s\r\n" % (gStaticHtmlTable[code].msg, gStaticHtmlTable[code].desc)
 		html += "  </BODY>\r\n"
 		html += "</HTML>\r\n"
 
 		return html
+
+class PseudoDMS (BaseSimpleHttpServer):
+	def __init__(self):
+		super(PseudoDMS, self).__init__()
+
+	# return
+	#     tuple[0]: HTTP status code
+	#     tuple[1]: response body
+	#     tuple[2]: content type
+	def onHttpMethod_POST (self, reqPath, packet):
+		if reqPath is None or len (reqPath) == 0 or\
+			packet is None or len (packet) == 0:
+
+			code = 500
+			resBody = self.createErrHtml (code)
+			conType = self.getContentType ("html")
+			return (code, resBody, conType)
+
+		code = 200
+		resBody = ""
+		conType = ""
+
+		req = HttpRequest (packet)
+		if req.error_code is None:
+
+			soapAct = req.getheader ("SOAPACTION")
+			if soapAct is not None:
+
+				if re.search ("^\".+#.+\"$", soapAct, re.IGNORECASE):
+					spSoapAct = soapAct.strip("\"").split("#")
+					if len (spSoapAct) == 2:
+						reqServiceType = spSoapAct[0]
+						reqAction = spSoapAct[1]
+
+						soapResponse = ""
+						if reqAction == "X_HDLnkGetRecordDestinations":
+							soapResponse = "<RecordDestinationList>&lt;?xml version=&quot;1.0&quot; encoding=&quot;UTF-8&quot;?&gt;&lt;RecordDestinations xmlns=&quot;urn:schemas-hdlnk-org&quot;&gt;&lt;RecordDestination destID=&quot;HDD&quot; version=&quot;1&quot;&gt;HDD&lt;/RecordDestination&gt;&lt;/RecordDestinations&gt;</RecordDestinationList>"
+						elif reqAction == "X_HDLnkGetRecordDestinationInfo":
+							soapResponse = "<RecordDestinationInfo>&lt;?xml version=&quot;1.0&quot; encoding=&quot;UTF-8&quot;?&gt;&lt;RecordDestinationInfo xmlns=&quot;urn:schemas-hdlnk-org&quot; version=&quot;1&quot; allowedTypes=&quot;HDD&quot; recordable=&quot;1&quot; totalCapacity=&quot;1073741824000&quot; availableCapacity=&quot;968133156306&quot; dtcpSupport=&quot;1&quot;&gt;HDD &lt;/RecordDestinationInfo&gt;</RecordDestinationInfo>"
+
+						contentHeader        = "<?xml version=\"1.0\" encoding=\"utf-8\"?>\r\n"
+						contentHeader       += "<s:Envelope s:encodingStyle=\"%s\" xmlns:s=\"%s\">\r\n" % (ENCODING_STYLE_XMLSOAP, NAMESPACE_XMLSOAP_ENV)
+						contentBody          = "  <s:Body>\r\n"
+						contentBody         += "    <u:%sResponse xmlns:u=\"%s\">\r\n" % (reqAction, reqServiceType)
+						contentBody         += "      %s\r\n" % soapResponse
+						contentBody         += "    </u:%sResponse>\r\n" % (reqAction)
+						contentBody         += "  </s:Body>\r\n"
+						contentFooter        = "</s:Envelope>\r\n"
+
+						if len (soapResponse) == 0:
+							code = 400
+							resBody = self.createErrHtml (code)
+							conType = self.getContentType ("html")
+
+						else:
+							code = 200
+							resBody = contentHeader + contentBody + contentFooter
+							conType  = self.getContentType ("xml")
+
+					else:
+						code = 400
+						resBody = self.createErrHtml (code)
+						conType = self.getContentType ("html")
+
+				else:
+					code = 400
+					resBody = self.createErrHtml (code)
+					conType = self.getContentType ("html")
+
+			else:
+				code = 400
+				resBody = self.createErrHtml (code)
+				conType = self.getContentType ("html")
+
+		else:
+			debugPrint ("req.error_message -- %s" % req.error_message)
+			code = 400
+			resBody = self.createErrHtml (code)
+			conType = self.getContentType ("html")
+
+		return (code, resBody, conType)
 
 class ControlPoint (CommonFuncs):
 	def __init__(self, arg0=None, arg1=None, arg2=None, arg3=None):
@@ -2868,10 +3051,10 @@ def putsGlobalState():
 	else:
 		print "cache-control(max-age): [disable]"
 
-	if gIsEnableDeviceHost:
-		print "pseudo UPnP DeviceHost: [enable]"
+	if gPseudoDMS.isEnable():
+		print "pseudo DMS: [enable]"
 	else:
-		print "pseudo UPnP DeviceHost: [disable]"
+		print "pseudo DMS: [disable]"
 
 	if gIsDebugPrint:
 		print "debug print: [on]"
@@ -2910,7 +3093,7 @@ def showHelp():
 	print "  h                              - show command referense"
 	print "  d                              - debug log (toggle on/off(def))"
 	print "  dd                             - debug log sub (toggle on/off(def))"
-	print "  ddd                            - pseudo UPnP DeviceHost (toggle enable/disable(def))"
+	print "  ddd                            - enable pseudo DMS (toggle enable/disable(def))"
 	print "  q                              - exit from console"
 
 def cashCommand(cmd):
@@ -2924,7 +3107,6 @@ def cashCommand(cmd):
 def checkCommand(cmd):
 	global gIsDebugPrint
 	global gIsDebugPrintSub
-	global gIsEnableDeviceHost
 
 	if cmd is None:
 		return True
@@ -2966,21 +3148,15 @@ def checkCommand(cmd):
 		cashCommand(cmd)
 
 	elif cmd == "ddd":
-		if gIsEnableDeviceHost:
-			gIsEnableDeviceHost = False
-			print "[pseudo UPnP DeviceHost diable]"
-		else:
-			gIsEnableDeviceHost = True
-			print "[pseudo UPnP DeviceHost enable]"
-		if gDeviceHostServerThread is not None:
-			gDeviceHostServerThread.toggle()
+		if gPseudoDMS is not None:
+			gPseudoDMS.toggle()
 		cashCommand(cmd)
 
 	elif cmd == "n":
-		if gIsEnableDeviceHost:
+		if gPseudoDMS.isEnable():
 			sendSsdpNotify()
 		else:
-			print "must enable pseudo UPnP DeviceHost..."
+			print "must enable pseudo DMS..."
 			print "--> enter \"ddd\" command."
 		cashCommand(cmd)
 
@@ -3116,7 +3292,7 @@ def debugPrint(msg):
 			return
 		else:
 			# gIsDebugPrintSub
-			if threading.current_thread().ident != gDeviceHostServerThread.getId():
+			if threading.current_thread().ident != gPseudoDMS.getId():
 				return
 
 	d = datetime.datetime.now()
@@ -3156,7 +3332,7 @@ def main(ifName):
 	global gWorkerThread
 	global gSsdpListener
 	global gTimerThread
-	global gDeviceHostServerThread
+	global gPseudoDMS
 
 	addr = getIfAddr(ifName)
 	if addr is None:
@@ -3177,23 +3353,13 @@ def main(ifName):
 	gWorkerThread = WorkerThread()
 	gSsdpListener = SsdpListener()
 	gTimerThread = TimerThread()
-	gDeviceHostServerThread = DeviceHostServerThread()
+	gPseudoDMS = PseudoDMS()
 
 	#--  start sub thread
 	gWorkerThread.start()
 	gSsdpListener.start()
 	gTimerThread.start()
-	gDeviceHostServerThread.start()
-
-
-
-	#TODO
-#	Handler = SimpleHTTPServer.SimpleHTTPRequestHandler
-#	SocketServer.TCPServer.allow_reuse_address = True
-#	httpd = SocketServer.TCPServer(("", DEVICE_HOST_PORT), Handler)
-#	ost = OneShotThread (httpd.serve_forever)
-#	ost.start()
-
+	gPseudoDMS.start()
 
 
 	print ""
@@ -3208,9 +3374,6 @@ def main(ifName):
 	#TODO  finish sub thread
 #	gWorkerThread.join()
 #	timerThread.join()
-
-#	httpd.shutdown()
-#	httpd.server_close()
 
 if __name__ == "__main__":
 
