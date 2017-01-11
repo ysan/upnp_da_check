@@ -1890,9 +1890,10 @@ gContentTypeTable = {\
 }
 
 class BaseSimpleHttpServer (BaseThread, CommonFuncs):
-	def __init__(self):
+	def __init__(self, port = 80):
 		super(BaseSimpleHttpServer, self).__init__(False)
 		self.__sock = None
+		self.__port = port
 
 	def onDisable (self):
 		debugPrint ("onDisable")
@@ -1913,8 +1914,13 @@ class BaseSimpleHttpServer (BaseThread, CommonFuncs):
 				conn, addr = self.__sock.accept()
 				debugPrint ("client %s" % str(addr[0]))
 
-#DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD client socket timeout 5
-				rtnTSH = self.recvOnTcpServerOverHttp (conn, 5)
+				clTimeout = 3
+
+				# for debug
+				if str(addr[0]) == "127.0.0.1":
+					clTimeout = 60
+
+				rtnTSH = self.recvOnTcpServerOverHttp (conn, clTimeout)
 				buff = rtnTSH[0]
 				requestBody = rtnTSH[1]
 				requestLine = rtnTSH[2]
@@ -1973,7 +1979,7 @@ class BaseSimpleHttpServer (BaseThread, CommonFuncs):
 		self.__sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 		self.__sock.settimeout(2) # accept timeout
 		self.__sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-		serverAddr = ("", DEVICE_HOST_PORT) # server address = "" --> INADDR_ANY
+		serverAddr = ("", self.__port) # server address = "" --> INADDR_ANY
 		self.__sock.bind(serverAddr)
 		#TODO
 		self.__sock.listen(5)
@@ -2221,7 +2227,7 @@ class BaseSimpleHttpServer (BaseThread, CommonFuncs):
 
 class PseudoDMS (BaseSimpleHttpServer):
 	def __init__(self):
-		super(PseudoDMS, self).__init__()
+		super(PseudoDMS, self).__init__ (DEVICE_HOST_PORT)
 
 	# return
 	#     tuple[0]: HTTP status code
@@ -2798,7 +2804,13 @@ def sendOnUdpMulticast (args):
 	cf = CommonFuncs ()
 	cf.sendOnUdpMulticast (addr, port, msg)
 
-def sendSsdpNotify():
+def sendSsdpNotify (isAlive):
+		ntskind = ""
+		if isAlive:
+			ntskind = "ssdp:alive"
+		else:
+			ntskind = "ssdp:byebye"
+
 #		notifyType = "upnp:rootdevice"
 		notifyType = "urn:schemas-upnp-org:device:MediaServer:1"
 
@@ -2806,7 +2818,7 @@ def sendSsdpNotify():
 		msg += "HOST: 239.255.255.250:1900\r\n"
 		msg += "cache-control: max-age=1800\r\n"
 		msg += "Location: http://%s:%d/%s\r\n" % (gIfAddr, DEVICE_HOST_PORT, DEVICE_DISCRIPTION_PATH)
-		msg += "NTS: ssdp:alive\r\n"
+		msg += "NTS: %s\r\n" % ntskind
 		msg += "Server: \r\n"
 		msg += "NT: %s\r\n" % notifyType
 		msg += "USN: %s::%s\r\n" % (gUdn, notifyType)
@@ -3087,6 +3099,8 @@ def showHelp():
 	print "  r                              - join UPnP multicast group (toggle on(def)/off)"
 	print "  t                              - cache-control(max-age) (toggle enable(def)/disable)"
 	print "  sc  [ipaddr]                   - send SSDP M-SEARCH"
+	print "  na                             - send SSDP Notify (ssdp:alive)"
+	print "  nb                             - send SSDP Notify (ssdp:byebye)"
 	print "  sd  http-url                   - simple HTTP downloader"
 	print "  ss                             - show status"
 	print "  c                              - show command hitory"
@@ -3152,9 +3166,17 @@ def checkCommand(cmd):
 			gPseudoDMS.toggle()
 		cashCommand(cmd)
 
-	elif cmd == "n":
+	elif cmd == "na":
 		if gPseudoDMS.isEnable():
-			sendSsdpNotify()
+			sendSsdpNotify (True)
+		else:
+			print "must enable pseudo DMS..."
+			print "--> enter \"ddd\" command."
+		cashCommand(cmd)
+
+	elif cmd == "nb":
+		if gPseudoDMS.isEnable():
+			sendSsdpNotify (False)
 		else:
 			print "must enable pseudo DMS..."
 			print "--> enter \"ddd\" command."
