@@ -3,7 +3,7 @@
 
 import socket
 import sys
-import fcntl
+#import fcntl
 import re  
 from httplib import HTTPResponse
 from BaseHTTPServer import BaseHTTPRequestHandler
@@ -26,9 +26,10 @@ import time
 import itertools
 import copy
 import os
-import struct
-import SimpleHTTPServer
-import SocketServer
+#import struct
+#import SimpleHTTPServer
+#import SocketServer
+import netifaces
 
 
 NAMESPACE_UPNP_DEVICE   = "urn:schemas-upnp-org:device-1-0"
@@ -1651,7 +1652,8 @@ class UpnpMulticastReceiver (BaseThread, CommonFuncs):
 	def onExecMain (self):
 
 		sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-		serverAddr = ("239.255.255.250", 1900)
+		serverAddr = (gIfAddr, 1900)
+		sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 		sock.bind(serverAddr)
 		mreq = socket.inet_aton("239.255.255.250") + socket.inet_aton(gIfAddr)
 		sock.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, mreq)
@@ -2335,7 +2337,7 @@ class ControlPoint (CommonFuncs):
 		sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 		sock.settimeout(MSEARCH_TIMEOUT)
 		serverAddr = (gIfAddr, 1900) # server address = "" --> INADDR_ANY
-		sock.bind(serverAddr)
+#		sock.bind(serverAddr)
 		if isMulticast:
 #			sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_LOOP, 0)
 			sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_IF, socket.inet_aton(gIfAddr))
@@ -3005,25 +3007,52 @@ def downloadAtHttp (url):
 		else:
 			print "can not download...  (status=%s)" % response[1]
 
-def getIfAddr(ifName):
-	s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-	try:
-		#TODO
-		# The third argument is requesting a 32byte ???
-		result = fcntl.ioctl(s.fileno(), SIOCGIFADDR, (ifName+"\0"*32)[:32])
-	except IOError:
-		s.close()
-		return None
+def getIfAddr (ifName):
+#	s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+#	try:
+#		#TODO
+#		# The third argument is requesting a 32byte ???
+#		result = fcntl.ioctl(s.fileno(), SIOCGIFADDR, (ifName+"\0"*32)[:32])
+#	except IOError:
+#		s.close()
+#		return None
+#
+#	s.close()
+#
+#	# The purpose of the data is entered from the results obtained 20byte in ioctl to 23byte th
+#	return socket.inet_ntoa(result[20:24])
 
-	s.close()
+	for ifaceName in netifaces.interfaces():
+		if re.match (ifName, ifaceName):
+			ifaceAddr = netifaces.ifaddresses (ifaceName)
+			ifaceAddrv4 = ifaceAddr.get (netifaces.AF_INET)
+			if ifaceAddrv4 is not None:
+				return ifaceAddrv4[0] ['addr']
+			else:
+				break
 
-	# The purpose of the data is entered from the results obtained 20byte in ioctl to 23byte th
-	return socket.inet_ntoa(result[20:24])
+	print "---- netifaces.interfaces ----"
+	for ifaceName in netifaces.interfaces():
+		ifaceAddr = netifaces.ifaddresses (ifaceName)
+		ifaceAddrv4 = ifaceAddr.get (netifaces.AF_INET)
+		print "  %s" % ifaceName
+		print "    %s" % ifaceAddrv4
+	print "------------------------------"
+			
+	return None
 
 def getHwAddr(ifname):
-	s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-	info = fcntl.ioctl(s.fileno(), SIOCGIFHWADDR,  struct.pack('256s', ifname[:15]))
-	return ':'.join(['%02x' % ord(char) for char in info[18:24]])
+#	s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+#	info = fcntl.ioctl(s.fileno(), SIOCGIFHWADDR,  struct.pack('256s', ifname[:15]))
+#	return ':'.join(['%02x' % ord(char) for char in info[18:24]])
+
+	for ifaceName in netifaces.interfaces():
+		if re.match (ifname, ifaceName):
+			ifaceAddr = netifaces.ifaddresses (ifaceName)
+			ifaceAddrHw = ifaceAddr.get (netifaces.AF_LINK)
+			return ifaceAddrHw[0] ['addr']
+
+	return None
 
 def putsGlobalState():
 	print "--------------------------------"

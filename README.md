@@ -1,4 +1,4 @@
-UPnP DA checktool (sniffer)
+UPnP Device Architecture protocol sniffer
 ===============
 
 The tool is intended to perform control for devices that perform user with various functions as a UPnP Device Architecture is a control point.
@@ -132,7 +132,7 @@ After selecting the service, you will select the action.
 	    Hit Enter. (return to -Select service type.-)
 
 Result of action has been returned.  
-You can view the contents of the HTTP status code and the body, you have to display the value obtained in the action.
+You can view the contents of the HTTP status code and the body, you have to display the value obtained in the action.  
 "X_PrinterStatusString" results I have indicates that the ink is running low.
 
 
@@ -172,9 +172,10 @@ Tool in the command
 
 Platforms
 ------------
-Linux generally will be ok. (confirmed worked on Ubuntu, Fedora)
+python 2.7  
+Generic Linux/Windows will be ok. (confirmed worked on Ubuntu, Fedora, Windows8)
 
-These in operation verification settled.
-I think when you work with other distributions.
+These in operation verification settled.  
+I think when you work with other distributions.  
 You need to install some of the python module depending on the operating environment.
 
