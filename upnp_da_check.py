@@ -3031,14 +3031,6 @@ def getIfAddr (ifName):
 			else:
 				break
 
-	print "---- netifaces.interfaces ----"
-	for ifaceName in netifaces.interfaces():
-		ifaceAddr = netifaces.ifaddresses (ifaceName)
-		ifaceAddrv4 = ifaceAddr.get (netifaces.AF_INET)
-		print "  %s" % ifaceName
-		print "    %s" % ifaceAddrv4
-	print "------------------------------"
-			
 	return None
 
 def getHwAddr(ifname):
@@ -3053,6 +3045,15 @@ def getHwAddr(ifname):
 			return ifaceAddrHw[0] ['addr']
 
 	return None
+
+def showNetifaces ():
+	print "---- netifaces.interfaces ----"
+	for ifaceName in netifaces.interfaces():
+		ifaceAddr = netifaces.ifaddresses (ifaceName)
+		ifaceAddrv4 = ifaceAddr.get (netifaces.AF_INET)
+		print "  [%s]" % ifaceName
+		print "    %s" % ifaceAddrv4
+	print "------------------------------"
 
 def putsGlobalState():
 	print "--------------------------------"
@@ -3387,7 +3388,8 @@ def main(ifName):
 
 	addr = getIfAddr(ifName)
 	if addr is None:
-		print "%s is not existed." % ifName
+		print "[%s] is not existed.\n" % ifName
+		showNetifaces ()
 		return
 	else:
 		gIfAddr = addr

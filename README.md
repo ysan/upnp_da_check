@@ -1,19 +1,16 @@
-UPnP Device Architecture protocol sniffer
+upnp da check (UPnP Device Architecture protocol sniffer)
 ===============
-
 The tool is intended to perform control for devices that perform user with various functions as a UPnP Device Architecture is a control point.
-
 
 Usage
 --------
-
 	$ ./upnp_da_check.py ifname
 
 on the command line. Execution path you are free.
 
-
 Examples
 --------
+Console will rise when you start the program.
 
 	$ ./upnp_da_check.py eth0
 	
@@ -31,8 +28,10 @@ Examples
 	./upnp_da_check.py >
 	./upnp_da_check.py >
 
-Console will rise when you start the program.
 
+as long as it receives the discover packet and keeps the information to the device list.  
+You have to display a list with the ls command.  
+This is when there is some upnp enabled devices on the LAN if.
 
 	./upnp_da_check.py > ls
 	UDN                                           AGE    S/S FriendlyName           ManufactureName        LocationUrl
@@ -52,10 +51,14 @@ Console will rise when you start the program.
 	11 items.
 	./upnp_da_check.py >
 
-as long as it receives the discover packet and keeps the information to the device list.  
-You have to display a list with the ls command.  
-This is when there is some upnp enabled devices on the LAN if.
 
+If you pass the argument UDN to info command, detailed information for that device appears.  
+(Display content here it will omitted.)  
+\- Discover the contents of the packet  
+\- Location overview of the content of  
+\- The Published service list  
+\- In-service there is what kind of action, and information of the argument to pass to the action  
+etc...
 
 	./upnp_da_check.py > info uuid:cfe92100-67c4-11d4-a45f-xxxxxxxxxxxx
 	===============================
@@ -77,14 +80,9 @@ This is when there is some upnp enabled devices on the LAN if.
 	.
 	.
 
-If you pass the argument UDN to info command, detailed information for that device appears.  
-(Display content here it will omitted.)  
-\- Discover the contents of the packet  
-\- Location overview of the content of  
-\- The Published service list  
-\- In-service there is what kind of action, and information of the argument to pass to the action  
-etc...
 
+If you pass the argument UDN to act command, you can perform the action of the public service for the equipment.  
+You choose whether first how to service.
 
 	./upnp_da_check.py > act uuid:cfe92100-67c4-11d4-a45f-xxxxxxxxxxxx
 	  ____________________
@@ -95,9 +93,7 @@ etc...
 	
 	      Enter No. --> 
 
-If you pass the argument UDN to act command, you can perform the action of the public service for the equipment.  
-You choose whether first how to service.
-
+After selecting the service, you will select the action.
 
 	      Enter No. --> 2
 	        service type is [urn:schemas-upnp-org:service:PrintEnhanced:1].
@@ -116,8 +112,7 @@ You choose whether first how to service.
 	
 	        Enter No. --> 
 
-After selecting the service, you will select the action.
-
+select the action.
 
 	        Enter No. --> 2
 	          action is [X_GetPrinterStatusString].
@@ -134,7 +129,8 @@ After selecting the service, you will select the action.
 Result of action has been returned.  
 You can view the contents of the HTTP status code and the body, you have to display the value obtained in the action.  
 "X_PrinterStatusString" results I have indicates that the ink is running low.
-
+  
+When the exit from the console, enter the "q".
 
 	  ____________________
 	  Select service type.
@@ -149,31 +145,52 @@ You can view the contents of the HTTP status code and the body, you have to disp
 	$ 
 	$ 
 	
-When the exit from the console, enter the "q".
-
 
 Tool in the command
 ------------
-- ls  [UDN|ipaddr|friendlyName]  - show device list (friendlyName can be specified by wildcard.)
-- an  UDN                        - analyze device (connect to device and get device info.)
-- info  UDN                      - show device info
-- act  UDN                       - send action to device
-- r                              - join UPnP multicast group (toggle on(def)/off)
-- t                              - cache-control (toggle enable(def)/disable)
-- sc  [ipaddr]                   - send SSDP M-SEARCH
-- sd  http-url                   - simple HTTP downloader
-- ss                             - show status
-- c                              - show command hitory
-- h                              - show command referense
-- d                              - debug log (toggle on/off(def))
-- q                              - exit from console
+	ls [UDN|ipaddr|friendlyName]
+&nbsp;&nbsp;&nbsp;&nbsp;show device list (friendlyName can be specified by wildcard.)
 
+	an UDN
+&nbsp;&nbsp;&nbsp;&nbsp;analyze device (connect to device and get device info.)
 
+	info UDN
+&nbsp;&nbsp;&nbsp;&nbsp;show device info
+
+	act UDN
+&nbsp;&nbsp;&nbsp;&nbsp;send action to device
+
+	r
+&nbsp;&nbsp;&nbsp;&nbsp;join UPnP multicast group (toggle on(def)/off)
+
+	t
+&nbsp;&nbsp;&nbsp;&nbsp;cache-control (toggle enable(def)/disable)
+
+	sc [ipaddr]
+&nbsp;&nbsp;&nbsp;&nbsp;send SSDP M-SEARCH
+
+	sd http-url
+&nbsp;&nbsp;&nbsp;&nbsp;simple HTTP downloader
+
+	ss
+&nbsp;&nbsp;&nbsp;&nbsp;show status
+
+	c
+&nbsp;&nbsp;&nbsp;&nbsp;show command hitory
+
+	h
+&nbsp;&nbsp;&nbsp;&nbsp;show command referense
+
+	d
+&nbsp;&nbsp;&nbsp;&nbsp;debug log (toggle on/off(def))
+
+	q
+&nbsp;&nbsp;&nbsp;&nbsp;exit from console
 
 Platforms
 ------------
-python 2.7  
-Generic Linux/Windows will be ok. (confirmed worked on Ubuntu, Fedora, Windows8)
+Generic Linux/Windows will be ok. (confirmed worked on Ubuntu, Fedora, Windows8)  
+python 2.7
 
 These in operation verification settled.  
 I think when you work with other distributions.  
