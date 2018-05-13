@@ -28,6 +28,10 @@ Console will rise when you start the program.
 	./upnp_da_check.py >
 	./upnp_da_check.py >
 
+You can execute M-SEARCH with sc command.
+
+	./upnp_da_check.py > sc
+	./upnp_da_check.py >
 
 as long as it receives the discover packet and keeps the information to the device list.  
 You have to display a list with the ls command.  
@@ -161,10 +165,10 @@ Tool in the command
 &nbsp;&nbsp;&nbsp;&nbsp;send action to device
 
 	r
-&nbsp;&nbsp;&nbsp;&nbsp;join UPnP multicast group (toggle on(def)/off)
+&nbsp;&nbsp;&nbsp;&nbsp;join UPnP multicast group (toggle on(default)/off)
 
 	t
-&nbsp;&nbsp;&nbsp;&nbsp;cache-control (toggle enable(def)/disable)
+&nbsp;&nbsp;&nbsp;&nbsp;cache-control (toggle enable(default)/disable)
 
 	sc [ipaddr]
 &nbsp;&nbsp;&nbsp;&nbsp;send SSDP M-SEARCH
@@ -182,7 +186,7 @@ Tool in the command
 &nbsp;&nbsp;&nbsp;&nbsp;show command referense
 
 	d
-&nbsp;&nbsp;&nbsp;&nbsp;debug log (toggle on/off(def))
+&nbsp;&nbsp;&nbsp;&nbsp;debug log (toggle on/off(default))
 
 	q
 &nbsp;&nbsp;&nbsp;&nbsp;exit from console
