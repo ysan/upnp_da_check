@@ -8,7 +8,7 @@ Usage
 
 on the command line. Execution path you are free.
 
-Examples
+Example of use
 --------
 Console will rise when you start the program.
 
