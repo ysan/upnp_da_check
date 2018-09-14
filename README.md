@@ -4,7 +4,7 @@ The tool is intended to perform control for devices that perform user with vario
 
 Usage
 --------
-	$ ./upnp_da_check.py ifname
+	$ ./upnp_da_check.py interface_name
 
 on the command line. Execution path you are free.
 
@@ -24,20 +24,20 @@ Console will rise when you start the program.
 	--------------------------------
 
 	console start...
-	./upnp_da_check.py >
-	./upnp_da_check.py >
-	./upnp_da_check.py >
+	>
+	>
+	>
 
 You can execute M-SEARCH with sc command.
 
-	./upnp_da_check.py > sc
-	./upnp_da_check.py >
+	> sc
+	>
 
 as long as it receives the discover packet and keeps the information to the device list.  
 You have to display a list with the ls command.  
 This is when there is some upnp enabled devices on the LAN if.
 
-	./upnp_da_check.py > ls
+	> ls
 	UDN                                           AGE    S/S FriendlyName           ManufactureName        LocationUrl
 	--------------------------------------------- ----- ---- ---------------------- ---------------------- -------------------------------------
 	uuid:55076f6e-6b79-1d65-a497-xxxxxxxxxxxx      1808  3/3 [TomServer           ] [PacketVideo         ] http://43.3.183.246:9000/dev0/desc.xml
@@ -53,7 +53,7 @@ This is when there is some upnp enabled devices on the LAN if.
 	uuid:a36e2757-2f7f-491b-8b4a-xxxxxxxxxxxx       899  3/3 [JPC00141623: 0000131] [Microsoft Corporatio] http://43.31.105.114:2869/upnphost/udhisapi.dll?content=uuid:a36e2757-2f7f-491b-8b4a-b4ae5dfbe4f8
 	---------
 	11 items.
-	./upnp_da_check.py >
+	>
 
 
 If you pass the argument UDN to info command, detailed information for that device appears.  
@@ -64,7 +64,7 @@ If you pass the argument UDN to info command, detailed information for that devi
 \- In-service there is what kind of action, and information of the argument to pass to the action  
 etc...
 
-	./upnp_da_check.py > info uuid:cfe92100-67c4-11d4-a45f-xxxxxxxxxxxx
+	> info uuid:cfe92100-67c4-11d4-a45f-xxxxxxxxxxxx
 	===============================
 	====      Detail Info      ====
 	===============================
@@ -88,7 +88,7 @@ etc...
 If you pass the argument UDN to act command, you can perform the action of the public service for the equipment.  
 You choose whether first how to service.
 
-	./upnp_da_check.py > act uuid:cfe92100-67c4-11d4-a45f-xxxxxxxxxxxx
+	> act uuid:cfe92100-67c4-11d4-a45f-xxxxxxxxxxxx
 	  ____________________
 	  Select service type.
 	  --------------------
@@ -143,8 +143,8 @@ When the exit from the console, enter the "q".
 	    2. urn:schemas-upnp-org:service:PrintEnhanced:1
 	
 	      Enter No. --> q
-	./upnp_da_check.py >
-	./upnp_da_check.py > q
+	>
+	> q
 	console end.
 	$ 
 	$ 

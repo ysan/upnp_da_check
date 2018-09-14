@@ -3051,8 +3051,8 @@ def showNetifaces ():
 	for ifaceName in netifaces.interfaces():
 		ifaceAddr = netifaces.ifaddresses (ifaceName)
 		ifaceAddrv4 = ifaceAddr.get (netifaces.AF_INET)
-		print "  [%s]" % ifaceName
-		print "    %s" % ifaceAddrv4
+		print "  interface_name: [%s]" % ifaceName
+		print "       %s" % ifaceAddrv4
 	print "------------------------------"
 
 def putsGlobalState():
@@ -3324,8 +3324,9 @@ def checkCommand(cmd):
 def mainLoop():
 
 	while True:
-		sys.stdout.write(argv[0])
-		sys.stdout.write(" > ")
+#		sys.stdout.write(argv[0])
+#		sys.stdout.write(" > ")
+		sys.stdout.write("> ")
 
 		cmd = raw_input().strip()
 		if gIsCatchSigInt:
@@ -3366,7 +3367,7 @@ def debugPrint(msg):
 			print compMsg
 
 def usage(arg):
-	print "Usage: %s ifname" % arg
+	print "Usage: %s interface_name" % arg
 
 def sigHandler(signum, frame):
 	debugPrint("catch signal %d %s" % (signum, frame))
@@ -3434,4 +3435,7 @@ if __name__ == "__main__":
 		main(sys.argv[1])
 	else:
 		usage(sys.argv[0])
+		print
+		print
+		showNetifaces ()
 
