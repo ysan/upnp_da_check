@@ -12,6 +12,8 @@ Example of use
 --------
 Console will rise when you start the program.
 
+	$ git clone https://github.com/ysan/upnp_da_check
+	$ cd upnp_da_check
 	$ ./upnp_da_check.py eth0
 	
 	== UPnP DA checktool (sniffer) ==
