@@ -2,6 +2,11 @@ upnp da check (UPnP Device Architecture protocol sniffer)
 ===============
 The tool is intended to perform control for devices that perform user with various functions as a UPnP Device Architecture is a control point.
 
+
+Setup
+--------
+	$ pip2 install -r requirements.txt
+
 Usage
 --------
 	$ ./upnp_da_check.py interface_name
@@ -197,8 +202,3 @@ Platforms
 ------------
 Generic Linux/Windows will be ok. (confirmed worked on Ubuntu, Fedora, Windows8)  
 python 2.7
-
-These in operation verification settled.  
-I think when you work with other distributions.  
-You need to install some of the python module depending on the operating environment.
-
