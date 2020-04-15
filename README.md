@@ -5,6 +5,8 @@ The tool is intended to perform control for devices that perform user with vario
 
 Setup
 --------
+	$ git clone https://github.com/ysan/upnp_da_check.git
+	$ cd upnp_da_check
 	$ pip2 install -r requirements.txt
 
 Usage
@@ -17,8 +19,6 @@ Example of use
 --------
 Console will rise when you start the program.
 
-	$ git clone https://github.com/ysan/upnp_da_check
-	$ cd upnp_da_check
 	$ ./upnp_da_check.py eth0
 	
 	== UPnP DA checktool (sniffer) ==
