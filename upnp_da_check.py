@@ -227,7 +227,7 @@ class DeviceInfo():
 
 
 	def printListFormat(self):
-		print "%s %5d %s [%s] [%s] %s" % (self.__usn.ljust(45)[:45], self.__age, self.__successPerGetScpd,
+		print "%s %5d %s [%s] [%s] %s" % (self.__usn.ljust(45), self.__age, self.__successPerGetScpd,
 												self.__friendlyName.ljust(20)[:20], self.__manufactureName.ljust(20)[:20], self.__loc)
 
 	def printInfo(self):
